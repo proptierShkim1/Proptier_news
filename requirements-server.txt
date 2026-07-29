@@ -1,0 +1,7 @@
+# hana_p 서버 의존성 (Linux)
+streamlit==1.56.0
+python-dotenv==1.2.2
+paramiko
+requests
+beautifulsoup4
+pandas

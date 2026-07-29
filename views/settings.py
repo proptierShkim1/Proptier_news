@@ -1,0 +1,629 @@
+import streamlit as st
+import json
+import os
+import re
+import datetime
+from datetime import date, timedelta
+from pathlib import Path
+
+import pandas as pd
+from dotenv import load_dotenv
+
+import collector
+import db
+from access_control import load_config, save_config, name_for_ip
+from utils import (
+    load_collection_schedule,
+    load_keywords,
+    save_collection_schedule,
+    save_keywords,
+)
+
+ROOT = Path(__file__).parent.parent
+load_dotenv(ROOT / ".env")
+
+DEPLOY_LOG_PATH = ROOT / "data" / "deploy_log.jsonl"
+
+_DEPLOY_HOST     = os.getenv("DEPLOY_HOST", "")
+_DEPLOY_SSH_PORT = int(os.getenv("DEPLOY_SSH_PORT", "22"))
+_DEPLOY_USER     = os.getenv("DEPLOY_USER", "")
+_DEPLOY_PASS     = os.getenv("DEPLOY_PASS", "")
+_DEPLOY_REMOTE   = os.getenv("DEPLOY_REMOTE_PATH", f"/home/{os.getenv('DEPLOY_USER','')}/hana_p")
+_DEPLOY_APP_PORT = int(os.getenv("DEPLOY_APP_PORT", "7000"))
+
+_UPLOAD_SUFFIXES = {".py", ".toml", ".txt", ".md", ".sh"}
+_UPLOAD_DIRS     = {"views", "crawlers", ".streamlit", "data", "scripts"}
+_UPLOAD_ROOT_EXTRAS = {".env"}
+_SFTP_SKIP       = {"__pycache__", ".git", "venv"}
+
+_TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+
+def _log_deploy(action: str, status: str, detail: str = ""):
+    ip = st.session_state.get("_client_ip", "") or ""
+    actor = name_for_ip(ip) or ip or "unknown"
+    entry = {
+        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "actor": actor,
+        "action": action,
+        "status": status,
+        "detail": detail,
+    }
+    DEPLOY_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with DEPLOY_LOG_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+# ── 서버 배포 ──────────────────────────────────────────────────────────────
+
+def _ssh_connect():
+    import paramiko
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh.connect(_DEPLOY_HOST, port=_DEPLOY_SSH_PORT,
+                username=_DEPLOY_USER, password=_DEPLOY_PASS, timeout=15)
+    return ssh
+
+
+def _ssh_run(ssh, cmd: str, timeout: int = 120):
+    _, stdout, stderr = ssh.exec_command(cmd, timeout=timeout)
+    rc = stdout.channel.recv_exit_status()
+    return stdout.read().decode(), stderr.read().decode(), rc
+
+
+def _sftp_mkdir_p(sftp, remote: str):
+    parts = remote.strip("/").split("/")
+    cur = ""
+    for p in parts:
+        cur += "/" + p
+        try:
+            sftp.stat(cur)
+        except OSError:
+            try:
+                sftp.mkdir(cur)
+            except OSError:
+                pass
+
+
+def _sftp_upload_dir(sftp, local_dir: Path, remote_dir: str, log):
+    _sftp_mkdir_p(sftp, remote_dir)
+    for item in sorted(local_dir.iterdir()):
+        if item.name in _SFTP_SKIP or item.suffix == ".pyc":
+            continue
+        remote_item = f"{remote_dir}/{item.name}"
+        if item.is_dir():
+            _sftp_upload_dir(sftp, item, remote_item, log)
+        else:
+            sftp.put(str(item), remote_item)
+            log(f"↑ {item.relative_to(ROOT)}")
+
+
+def _start_streamlit(ssh, log):
+    script = f"{_DEPLOY_REMOTE}/scripts/start_server.sh"
+    cmd = (
+        f"sed -i 's/\\r$//' {script} 2>/dev/null || true; "
+        f"chmod +x {script}; "
+        f"HANA_ROOT={_DEPLOY_REMOTE} HANA_PORT={_DEPLOY_APP_PORT} bash {script}"
+    )
+    out, err, rc = _ssh_run(ssh, cmd, timeout=30)
+    text = (out + err).strip()
+    if rc == 0 and "NOT_LISTENING" not in text:
+        log(f"🟢 Streamlit 기동 완료")
+        log(f"접속 주소: http://{_DEPLOY_HOST}:{_DEPLOY_APP_PORT}")
+    else:
+        log(f"🔴 기동 실패:\n{text[-500:]}")
+
+
+def _deploy():
+    log_box = st.empty()
+    lines = []
+
+    def log(msg):
+        lines.append(msg)
+        log_box.code("\n".join(lines[-50:]), language=None)
+
+    try:
+        log(f"SSH 연결 중... {_DEPLOY_USER}@{_DEPLOY_HOST}:{_DEPLOY_SSH_PORT}")
+        ssh = _ssh_connect()
+        log("✅ SSH 연결 완료")
+
+        out, _, _ = _ssh_run(ssh, f"test -d {_DEPLOY_REMOTE}/venv && echo YES || echo NO")
+        first_deploy = out.strip() != "YES"
+
+        sftp = ssh.open_sftp()
+        _ssh_run(ssh, f"mkdir -p {_DEPLOY_REMOTE}")
+
+        log("\n--- 코드 업로드 ---")
+        for item in sorted(ROOT.iterdir()):
+            if item.is_file() and (item.suffix in _UPLOAD_SUFFIXES or item.name in _UPLOAD_ROOT_EXTRAS):
+                sftp.put(str(item), f"{_DEPLOY_REMOTE}/{item.name}")
+                log(f"↑ {item.name}")
+        for dir_name in _UPLOAD_DIRS:
+            local_sub = ROOT / dir_name
+            if local_sub.exists():
+                _sftp_upload_dir(sftp, local_sub, f"{_DEPLOY_REMOTE}/{dir_name}", log)
+        log("✅ 코드 업로드 완료")
+        sftp.close()
+
+        if first_deploy:
+            log("\n--- 가상환경 설치 ---")
+            out, err, rc = _ssh_run(ssh, f"python3 -m venv {_DEPLOY_REMOTE}/venv", timeout=60)
+            log("✅ venv 생성" if rc == 0 else f"❌ venv 실패: {err.strip()}")
+
+        # requirements-server.txt가 배포 이후 바뀔 수 있으므로 venv 존재 여부와 무관하게
+        # 매 배포마다 설치를 다시 실행한다 (이미 설치된 패키지는 pip가 건너뛴다).
+        log("\n--- 패키지 설치 ---")
+        pip = f"{_DEPLOY_REMOTE}/venv/bin/pip"
+        req = f"{_DEPLOY_REMOTE}/requirements-server.txt"
+        log("패키지 설치 중... (수분 소요)")
+        out, err, rc = _ssh_run(ssh, f"{pip} install --upgrade pip && {pip} install -r {req}", timeout=600)
+        log("✅ 패키지 설치 완료" if rc == 0 else f"❌ 설치 실패:\n{err.strip()[-400:]}")
+
+        log("\n--- Streamlit 기동 ---")
+        _start_streamlit(ssh, log)
+        ssh.close()
+        _log_deploy("서버 배포", "success", "최초 배포" if first_deploy else "코드 업데이트")
+
+    except Exception as e:
+        log(f"\n❌ 배포 오류: {e}")
+        _log_deploy("서버 배포", "fail", str(e))
+
+
+def _render_deploy():
+    st.subheader("🚀 서버 배포")
+
+    if not _DEPLOY_HOST:
+        st.info(".env에 DEPLOY_HOST 등 배포 설정이 없습니다.")
+        return
+
+    st.caption(f"대상: `{_DEPLOY_USER}@{_DEPLOY_HOST}:{_DEPLOY_APP_PORT}` (SSH: {_DEPLOY_SSH_PORT}) → `{_DEPLOY_REMOTE}`")
+    st.caption("최초 배포 시 venv 생성 + 패키지 설치까지 자동 수행 / 이후 업데이트는 코드만 전송")
+
+    col_dep, col_svc = st.columns(2)
+    with col_dep:
+        if st.button("🚀 서버에 배포", type="primary", use_container_width=True):
+            _deploy()
+    with col_svc:
+        if st.button("🔄 Streamlit 재시작", use_container_width=True):
+            log_box2 = st.empty()
+            try:
+                ssh2 = _ssh_connect()
+                lines2 = []
+
+                def log2(m):
+                    lines2.append(m)
+                    log_box2.code("\n".join(lines2), language=None)
+
+                _start_streamlit(ssh2, log2)
+                ssh2.close()
+                _log_deploy("서비스 재시작", "success")
+            except Exception as e:
+                st.error(f"오류: {e}")
+                _log_deploy("서비스 재시작", "fail", str(e))
+
+
+# ── 접근 제어 ──────────────────────────────────────────────────────────────
+
+def _render_access_control():
+    client_ip = st.session_state.get("_client_ip", "") or ""
+    cfg = load_config()
+    allowed_ips = cfg.get("allowed_ips", [])
+    allowed_ips = [
+        entry if isinstance(entry, dict) else {"ip": entry, "name": ""}
+        for entry in allowed_ips
+    ]
+
+    if not allowed_ips:
+        st.warning(
+            f"⚠️ 허용 IP가 등록되지 않아 **누구나** 접근할 수 있습니다.  \n"
+            f"아래에서 본인 IP(`{client_ip}`)를 등록하세요."
+        )
+
+    st.subheader("허용 IP 관리")
+    st.caption(f"현재 접속 IP: `{client_ip}`")
+
+    col_name, col_ip = st.columns([2, 3])
+    with col_name:
+        new_name = st.text_input("이름", placeholder="예: 사무실, 김철수", key="input_name")
+    with col_ip:
+        new_ip = st.text_input("IP 주소", placeholder="예: 192.168.1.100", key="input_ip")
+
+    new_is_admin = st.checkbox("슈퍼관리자로 등록", key="input_is_admin", help="켜면 설정 메뉴까지 볼 수 있습니다.")
+
+    col_add, col_cur = st.columns(2)
+    with col_add:
+        submitted = st.button("➕ IP 추가", use_container_width=True)
+    with col_cur:
+        add_current = st.button("➕ 현재 접속 IP 추가", use_container_width=True)
+
+    if submitted:
+        ip_to_add = new_ip.strip()
+        if not ip_to_add:
+            st.warning("IP 주소를 입력하세요.")
+        elif any(e["ip"] == ip_to_add for e in allowed_ips):
+            st.warning("이미 등록된 IP입니다.")
+        else:
+            allowed_ips.append({"ip": ip_to_add, "name": new_name.strip(), "is_admin": new_is_admin})
+            save_config({"allowed_ips": allowed_ips})
+            st.session_state.input_name = ""
+            st.session_state.input_ip = ""
+            st.session_state.input_is_admin = False
+            st.success(f"`{ip_to_add}` 추가됨")
+            st.rerun()
+
+    if add_current:
+        if not client_ip:
+            st.warning("현재 IP를 확인할 수 없습니다.")
+        elif any(e["ip"] == client_ip for e in allowed_ips):
+            st.warning("이미 등록된 IP입니다.")
+        else:
+            allowed_ips.append({"ip": client_ip, "name": new_name.strip(), "is_admin": new_is_admin})
+            save_config({"allowed_ips": allowed_ips})
+            st.session_state.input_name = ""
+            st.session_state.input_ip = ""
+            st.session_state.input_is_admin = False
+            st.success(f"`{client_ip}` 추가됨")
+            st.rerun()
+
+    st.divider()
+    if not allowed_ips:
+        st.info("등록된 허용 IP가 없습니다. (현재 모든 접속 허용 중)")
+    else:
+        st.caption(f"등록된 허용 IP — {len(allowed_ips)}개")
+        for i, entry in enumerate(list(allowed_ips)):
+            col_n, col_i, col_admin, col_del = st.columns([2.5, 3.5, 1.5, 1])
+            col_n.write(entry.get("name") or "—")
+            col_i.code(entry["ip"])
+            cur_admin = entry.get("is_admin", False)
+            new_admin = col_admin.checkbox("관리자", value=cur_admin, key=f"admin_{i}_{entry['ip']}")
+            if new_admin != cur_admin:
+                entry["is_admin"] = new_admin
+                save_config({"allowed_ips": allowed_ips})
+                st.rerun()
+            if col_del.button("삭제", key=f"del_{i}_{entry['ip']}", use_container_width=True):
+                allowed_ips = [e for e in allowed_ips if e["ip"] != entry["ip"]]
+                save_config({"allowed_ips": allowed_ips})
+                st.rerun()
+
+
+# ── 데이터 수집 ────────────────────────────────────────────────────────────
+
+def _format_entry_status(entry):
+    return (
+        f"{entry['fetched']}건 조회 (신규 {entry['inserted']}, 중복 {entry['skipped']})"
+        if entry["ok"] else f"실패 - {entry['message']}"
+    )
+
+
+@st.fragment(run_every=2)
+def _show_collection_progress(run_id):
+    logs = [l for l in db.get_run_logs(limit=500) if l["run_id"] == run_id][::-1]
+    if logs:
+        lines = [f"[{e['channel']}] {e['brand']}: {_format_entry_status(e)}" for e in logs]
+        st.code("\n".join(lines), language=None, height=200)
+    if collector.active_run_id() == run_id:
+        st.caption(f"🔄 진행 중... ({len(logs)}건 완료)")
+    else:
+        ok_count = sum(1 for e in logs if e["ok"])
+        st.success(f"수집 완료: {len(logs)}건 실행, 성공 {ok_count}건")
+
+
+def _render_data_collection():
+    st.subheader("🏷️ 키워드 관리")
+    st.caption("네이버·구글·다음·커뮤니티(디시인사이드) 4개 채널에서 수집합니다. API 키 불필요.")
+    kw_cfg = load_keywords()
+
+    st.metric("등록 키워드", f"{len(kw_cfg['brands'])}개")
+
+    by_name = {b["name"]: b for b in kw_cfg["brands"]}
+    own_names = [n for n, b in by_name.items() if b.get("role") == "own"]
+    competitor_names = [n for n, b in by_name.items() if b.get("role", "competitor") == "competitor"]
+    market_names = [n for n, b in by_name.items() if b.get("role") == "market"]
+
+    own_text = st.text_area(
+        "우리 브랜드 (쉼표로 구분)", value=", ".join(own_names), height=68,
+        placeholder="예: 프롭티어", key="own_brand_text",
+    )
+    competitor_text = st.text_area(
+        "경쟁사 (쉼표로 구분)", value=", ".join(competitor_names), height=100,
+        placeholder="예: 직방, 다방", key="competitor_text",
+    )
+    market_text = st.text_area(
+        "시장 키워드 (쉼표로 구분)", value=", ".join(market_names), height=68,
+        placeholder="예: AI, 부동산AI, 프롭테크", key="market_keyword_text",
+    )
+
+    if st.button("💾 저장", key="save_brand_list"):
+        groups = [("competitor", competitor_text), ("market", market_text), ("own", own_text)]
+        role_by_name: dict[str, str] = {}
+        for role, text in groups:
+            for name in [x.strip() for x in text.split(",") if x.strip()]:
+                role_by_name[name] = role
+        kw_cfg["brands"] = [
+            {**by_name.get(name, {"name": name}), "role": role}
+            for name, role in role_by_name.items()
+        ]
+        save_keywords(kw_cfg)
+        st.rerun()
+
+    context_words = kw_cfg.get("context") or collector._REAL_ESTATE_CONTEXT_WORDS
+    with st.expander(f"필수 포함 키워드 ({len(context_words)}개, 전체 키워드 공통)"):
+        st.caption("제목/스니펫에 이 중 하나라도 없으면 노이즈로 간주해 수집하지 않습니다.")
+        context_text = st.text_area(
+            "필수 포함 키워드 (쉼표로 구분)", value=", ".join(context_words), height=300, key="context_text",
+        )
+        if st.button("💾 저장", key="save_context"):
+            seen = []
+            for word in [x.strip() for x in context_text.split(",") if x.strip()]:
+                if word not in seen:
+                    seen.append(word)
+            kw_cfg["context"] = seen
+            save_keywords(kw_cfg)
+            st.rerun()
+
+    with st.expander(f"제외 키워드 ({len(kw_cfg.get('exclude', []))}개, 전체 키워드 공통)"):
+        st.caption("제목/스니펫에 이 단어가 포함된 결과는 수집하지 않습니다.")
+        exclude_text = st.text_area(
+            "제외 키워드 (쉼표로 구분)", value=", ".join(kw_cfg.get("exclude", [])), height=150, key="exclude_text",
+        )
+        if st.button("💾 저장", key="save_exclude"):
+            seen = []
+            for excl in [x.strip() for x in exclude_text.split(",") if x.strip()]:
+                if excl not in seen:
+                    seen.append(excl)
+            kw_cfg["exclude"] = seen
+            save_keywords(kw_cfg)
+            st.rerun()
+
+    st.divider()
+    st.subheader("⏰ 수집 스케줄")
+    sched_cfg = load_collection_schedule()
+    times_text = st.text_input(
+        "수집 시각 (/로 구분)", value="/".join(sched_cfg["times"]),
+        placeholder="예: 09:00/13:00/17:00", key="sched_times_text",
+    )
+    if st.button("💾 저장", key="sched_save"):
+        tokens = [t.strip() for t in times_text.split("/") if t.strip()]
+        invalid = [t for t in tokens if not _TIME_RE.match(t)]
+        if invalid:
+            st.error(f"HH:MM 형식이 아닌 시각이 있습니다: {', '.join(invalid)}")
+        else:
+            seen = []
+            for t in tokens:
+                if t not in seen:
+                    seen.append(t)
+            save_collection_schedule({"times": seen})
+            st.rerun()
+    if sched_cfg["times"]:
+        st.caption(f"등록된 시각: {', '.join(sched_cfg['times'])}")
+    else:
+        st.caption("등록된 수집 시각이 없습니다.")
+
+    st.divider()
+    running_run_id = collector.active_run_id()
+    if running_run_id is None:
+        if st.button("🔄 지금 수집", type="primary", key="collect_now"):
+            started_run_id = collector.start_background_collection(trigger="수동")
+            if started_run_id:
+                st.session_state["watched_collection_run_id"] = started_run_id
+                st.rerun()
+            else:
+                st.warning("이미 다른 수집이 진행 중입니다.")
+    else:
+        st.info("🔄 수집이 진행 중입니다. 페이지를 벗어나거나 새로고침해도 계속 진행됩니다.")
+        st.session_state["watched_collection_run_id"] = running_run_id
+
+    display_run_id = running_run_id or st.session_state.get("watched_collection_run_id")
+    if display_run_id:
+        _show_collection_progress(display_run_id)
+
+    st.divider()
+    st.subheader("📜 수집 이력")
+    batches = db.get_run_batches(limit=50)
+    if batches:
+        batch_df = pd.DataFrame(batches)[
+            ["ran_at", "trigger", "brands", "channels", "combinations",
+             "fetched", "inserted", "skipped", "ok", "message"]
+        ]
+        st.dataframe(batch_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("아직 수집 이력이 없습니다.")
+
+
+# ── 데이터 관리(조회) ───────────────────────────────────────────────────────
+
+_PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
+_ROW_COL_RATIOS = [0.5, 1.0, 1.0, 0.7, 0.6, 0.6, 4.0, 0.6]
+_ROW_HEADERS = ["수집일시", "게시일", "브랜드", "채널", "구분", "제목", ""]
+
+
+def _match_type(brand: str, search_term: str) -> str:
+    if not search_term:
+        return "미상"
+    return "브랜드" if search_term == brand else "키워드"
+
+
+@st.dialog("상세 정보", width="large")
+def _show_mention_detail(row):
+    st.subheader(row["제목"])
+    st.write(
+        f"브랜드: {row['브랜드']}  |  채널: {row['채널']}  |  "
+        f"수집 키워드: {row['수집 키워드']} ({row['구분']})  |  출처: {row['출처']}"
+    )
+    st.write(f"수집일시: {row['수집일시']}  |  게시일: {row['게시일'] or '-'}")
+    st.markdown(f"[원문 링크]({row['URL']})")
+    st.divider()
+    st.write(row["스니펫"] or "(스니펫 없음)")
+    if row["본문"]:
+        st.divider()
+        st.markdown("**본문**")
+        st.write(row["본문"])
+
+
+def _render_data_management():
+    st.subheader("🗃 수집 데이터 조회")
+
+    brands = ["전체"] + [b["name"] for b in load_keywords()["brands"]]
+    channels = ["전체", "네이버", "구글", "다음", "커뮤니티"]
+
+    col_brand, col_channel, col_size = st.columns(3)
+    with col_brand:
+        selected_brand = st.selectbox("브랜드", brands, key="lookup_brand")
+    with col_channel:
+        selected_channel = st.selectbox("채널", channels, key="lookup_channel")
+    with col_size:
+        page_size = st.selectbox("표시 개수", _PAGE_SIZE_OPTIONS, key="lookup_page_size")
+
+    title_search = st.text_input("제목 검색", placeholder="검색어 입력...", key="lookup_title_search")
+
+    default_range_start = date.today() - timedelta(days=6)
+    default_range_end = date.today()
+    col_collect_filter, col_collect_start, col_collect_end = st.columns(3)
+    with col_collect_filter:
+        filter_by_collected = st.checkbox("수집일로 필터링", key="lookup_filter_by_collected")
+    with col_collect_start:
+        collected_start = st.date_input(
+            "수집일 시작", value=default_range_start,
+            key="lookup_collected_start", disabled=not filter_by_collected,
+        )
+    with col_collect_end:
+        collected_end = st.date_input(
+            "수집일 종료", value=default_range_end,
+            key="lookup_collected_end", disabled=not filter_by_collected,
+        )
+
+    mentions = db.get_mentions(
+        brand="" if selected_brand == "전체" else selected_brand,
+        channel="" if selected_channel == "전체" else selected_channel,
+    )
+    df = pd.DataFrame(
+        mentions,
+        columns=[
+            "id", "collected_at", "brand", "channel", "search_term",
+            "source_detail", "title", "url", "snippet", "posted_at", "content",
+        ],
+    ).rename(columns={
+        "collected_at": "수집일시", "brand": "브랜드", "channel": "채널",
+        "search_term": "수집 키워드", "source_detail": "출처", "title": "제목",
+        "url": "URL", "snippet": "스니펫", "posted_at": "게시일", "content": "본문",
+    })
+    df["구분"] = [
+        _match_type(brand, term) for brand, term in zip(df["브랜드"], df["수집 키워드"])
+    ]
+
+    if title_search:
+        df = df[df["제목"].str.contains(title_search, case=False, na=False)]
+
+    if filter_by_collected:
+        collected_dates = df["수집일시"].str[:10]
+        df = df[
+            (collected_dates >= collected_start.isoformat())
+            & (collected_dates <= collected_end.isoformat())
+        ]
+
+    total = len(df)
+    st.markdown(f"#### 조회 결과 ({total}건)")
+
+    filter_sig = (selected_brand, selected_channel, page_size, title_search,
+                  filter_by_collected, collected_start, collected_end)
+    if st.session_state.get("lookup_filter_sig") != filter_sig:
+        st.session_state["lookup_filter_sig"] = filter_sig
+        st.session_state["lookup_page"] = 1
+
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = min(st.session_state.get("lookup_page", 1), total_pages)
+    st.session_state["lookup_page"] = page
+    start = (page - 1) * page_size
+    end = min(start + page_size, total)
+    page_df = df.iloc[start:end]
+    page_ids = [int(i) for i in page_df["id"].tolist()]
+
+    page_sig = (filter_sig, page)
+    if st.session_state.get("lookup_page_sig") != page_sig:
+        st.session_state["lookup_page_sig"] = page_sig
+        st.session_state["lookup_select_all"] = False
+
+    if page_df.empty:
+        st.caption("조회된 데이터가 없습니다.")
+    else:
+        header_cols = st.columns([0.5] + _ROW_COL_RATIOS[1:])
+        select_all = header_cols[0].checkbox("", key="lookup_select_all", label_visibility="collapsed")
+        if select_all != st.session_state.get("lookup_select_all_prev"):
+            for row_id in page_ids:
+                st.session_state[f"lookup_row_select_{row_id}"] = select_all
+        st.session_state["lookup_select_all_prev"] = select_all
+        for label, col in zip(_ROW_HEADERS, header_cols[1:]):
+            col.markdown(f"**{label}**")
+
+        for _, row in page_df.iterrows():
+            row_id = int(row["id"])
+            cols = st.columns(_ROW_COL_RATIOS)
+            cols[0].checkbox("", key=f"lookup_row_select_{row_id}", label_visibility="collapsed")
+            cols[1].markdown(str(row["수집일시"]))
+            cols[2].markdown(str(row["게시일"]) if row["게시일"] else "-")
+            cols[3].markdown(str(row["브랜드"]))
+            cols[4].markdown(str(row["채널"]))
+            cols[5].markdown(str(row["구분"]))
+            title_text = str(row["제목"]).replace("<", "&lt;").replace(">", "&gt;")
+            cols[6].markdown(
+                f'<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" '
+                f'title="{title_text}">{title_text}</div>',
+                unsafe_allow_html=True,
+            )
+            if cols[7].button("보기", key=f"lookup_view_{row_id}", use_container_width=True):
+                _show_mention_detail(row)
+
+    selected_ids = [
+        row_id for row_id in page_ids
+        if st.session_state.get(f"lookup_row_select_{row_id}", False)
+    ]
+
+    del_col, count_col = st.columns([1, 5])
+    if del_col.button("🗑 선택 삭제", key="lookup_delete_button", disabled=not selected_ids):
+        deleted = db.delete_mentions(selected_ids)
+        st.success(f"{deleted}건 삭제했습니다.")
+        st.rerun()
+    count_col.caption(f"선택된 항목: {len(selected_ids)}건")
+
+    delete_all_confirm = st.checkbox(
+        "⚠️ 전체 삭제에 동의합니다 (필터와 무관하게 모든 수집 데이터가 삭제됩니다)",
+        key="lookup_delete_all_confirm",
+    )
+    if st.button("🗑️ 전체 삭제", key="lookup_delete_all_button", disabled=not delete_all_confirm):
+        deleted = db.delete_all_mentions()
+        st.success(f"전체 {deleted}건을 삭제했습니다.")
+        st.rerun()
+
+    st.divider()
+    pc1, pc2, pc3, pc4, pc5 = st.columns([1, 1, 2, 1, 1])
+    if pc1.button("◀◀ 처음", disabled=page <= 1, key="lookup_first"):
+        st.session_state["lookup_page"] = 1
+        st.rerun()
+    if pc2.button("◀ 이전", disabled=page <= 1, key="lookup_prev"):
+        st.session_state["lookup_page"] -= 1
+        st.rerun()
+    pc3.markdown(f"<div style='text-align:center;padding-top:6px'>{page} / {total_pages} 페이지</div>", unsafe_allow_html=True)
+    if pc4.button("다음 ▶", disabled=page >= total_pages, key="lookup_next"):
+        st.session_state["lookup_page"] += 1
+        st.rerun()
+    if pc5.button("끝 ▶▶", disabled=page >= total_pages, key="lookup_last"):
+        st.session_state["lookup_page"] = total_pages
+        st.rerun()
+
+
+# ── 메인 진입점 ────────────────────────────────────────────────────────────
+
+def render():
+    st.title("⚙️ 설정")
+
+    tab_access, tab_collect, tab_manage, tab_deploy = st.tabs(
+        ["🔐 접근 제어", "🔄 데이터 수집", "🗃 데이터 관리", "🚀 배포"]
+    )
+    with tab_access:
+        _render_access_control()
+    with tab_collect:
+        _render_data_collection()
+    with tab_manage:
+        _render_data_management()
+    with tab_deploy:
+        _render_deploy()

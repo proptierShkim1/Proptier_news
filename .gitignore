@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+streamlit.log
+data/access_config.json
+data/news.db
+data/keywords.json
+data/collection_schedule.json
+data/deploy_log.jsonl
+data/scheduler.log

@@ -1,0 +1,6 @@
+streamlit
+python-dotenv
+paramiko
+requests
+beautifulsoup4
+pandas
