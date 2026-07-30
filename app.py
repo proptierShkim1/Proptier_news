@@ -3,11 +3,13 @@ import streamlit as st
 import theme
 import db
 from access_control import is_allowed, is_admin
+from report_pdf import DECK_CSS
 from scheduler import start_scheduler_thread
 from views import news_today, firms, briefings, search, report, settings
 
 st.set_page_config(page_title="부동산 AI 주요뉴스", page_icon="\U0001F3E0", layout="wide")
 theme.inject()
+st.markdown(f"<style>{DECK_CSS}</style>", unsafe_allow_html=True)
 
 db.init_db()
 start_scheduler_thread()

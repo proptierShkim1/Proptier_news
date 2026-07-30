@@ -5,3 +5,4 @@ paramiko
 requests
 beautifulsoup4
 pandas
+playwright
