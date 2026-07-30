@@ -9,10 +9,14 @@ from datetime import datetime
 from pathlib import Path
 
 import collector
-from utils import load_collection_schedule
+from utils import load_collection_schedule, load_policy_collection_schedule
 
 _POLL_SECONDS = 30
+# 폴링 주기가 아니라 "혹시 한 번 놓쳐도 다음 실행에서 메꿔지도록" 여유를 둔 값 —
+# 정책 게시판은 URL UNIQUE로 어차피 중복 저장되지 않으니 매번 겹치게 가져와도 안전하다.
+_POLICY_COLLECTION_DAYS = 3
 _last_fired = ""
+_last_fired_policy = ""
 _lock = threading.Lock()
 _started = False
 
@@ -32,7 +36,8 @@ def schedule_matches_now(times: list, now: datetime) -> bool:
     return now.strftime("%H:%M") in times
 
 
-def _tick() -> None:
+def _tick_new_posts() -> None:
+    """신규 게시물(브랜드/시장 키워드) 자동 수집 체크. 예외를 상위로 전파하지 않는다."""
     global _last_fired
     try:
         now = datetime.now()
@@ -46,7 +51,32 @@ def _tick() -> None:
                     _last_fired = minute_key
                 collector.run_collection(trigger="자동")
     except Exception:
-        logger.exception("스케줄러 반복 실행 중 오류 발생")
+        logger.exception("스케줄러(신규 게시물) 반복 실행 중 오류 발생")
+
+
+def _tick_policy() -> None:
+    """정부 정책 자동 수집 체크. 신규 게시물과 독립된 스케줄/예외 처리."""
+    global _last_fired_policy
+    try:
+        now = datetime.now()
+        minute_key = now.strftime("%Y-%m-%d %H:%M")
+        with _lock:
+            already_fired = minute_key == _last_fired_policy
+        if not already_fired:
+            schedules = load_policy_collection_schedule()["times"]
+            if schedule_matches_now(schedules, now):
+                with _lock:
+                    _last_fired_policy = minute_key
+                result = collector.collect_all_policy_events(days=_POLICY_COLLECTION_DAYS, trigger="자동")
+                logger.info("정책 데이터 자동 수집 결과: %s", result)
+    except Exception:
+        logger.exception("스케줄러(정부 정책) 반복 실행 중 오류 발생")
+
+
+def _tick() -> None:
+    """스케줄러 한 사이클 분량의 로직. 신규 게시물/정부 정책은 각자 독립된 스케줄로 체크한다."""
+    _tick_new_posts()
+    _tick_policy()
 
 
 def _loop() -> None:
