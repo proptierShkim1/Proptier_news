@@ -184,6 +184,39 @@ def test_collect_all_policy_events_one_source_failing_does_not_block_others(tmp_
     assert result["LH"]["inserted"] == 1
 
 
+def test_collect_all_policy_events_one_collect_fn_raising_does_not_block_others(tmp_path, monkeypatch):
+    """fetch 계층이 아니라 소스의 collect_fn 전체(예: DB 저장 단계)에서 예기치
+    못한 예외가 나도 collect_all_policy_events는 전파하지 않고 해당 소스만
+    0으로 처리한 채 나머지 6개 소스 수집을 계속 진행해야 한다."""
+    _isolate(tmp_path, monkeypatch)
+
+    def boom(days, trigger, run_id):
+        raise RuntimeError("db write failed")
+
+    monkeypatch.setattr(collector, "collect_molit_press_releases", boom)
+    for crawler_name in [
+        "reb_crawler", "lh_crawler", "seoul_opengov_crawler",
+        "hf_crawler", "hug_crawler", "sh_crawler",
+    ]:
+        monkeypatch.setattr(
+            getattr(collector, crawler_name), "fetch_press_releases",
+            lambda start, end, c=crawler_name: [_fake_release(f"https://{c}/1")],
+        )
+
+    result = collector.collect_all_policy_events(days=30)
+
+    assert len(result) == 7
+    assert result["국토부"] == {"fetched": 0, "inserted": 0, "skipped": 0}
+    assert result["한국부동산원"]["inserted"] == 1
+    assert result["LH"]["inserted"] == 1
+    assert result["서울시"]["inserted"] == 1
+    assert result["HF"]["inserted"] == 1
+    assert result["HUG"]["inserted"] == 1
+    assert result["SH"]["inserted"] == 1
+    events = db.get_policy_events()
+    assert len(events) == 6
+
+
 def test_collect_all_policy_events_calls_on_progress_per_source(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     for crawler_name in [

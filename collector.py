@@ -220,9 +220,10 @@ def _collect_press_releases(
     fetch_press_releases, source: str, days: int, trigger: str = "수동", run_id: str | None = None,
 ) -> dict:
     """모든 정책 소스 수집 함수가 공유하는 fetch→source 태깅→저장→이력 기록 로직.
-    소스별 fetch_press_releases 자체가 실패 시 빈 리스트를 반환해 이 함수는 예외를
-    전파하지 않는다. run_id를 주지 않으면(단일 소스 수동 실행 등) 새로 생성해
-    그 자체로 1건짜리 배치가 된다."""
+    소스별 fetch_press_releases 자체가 실패 시 빈 리스트를 반환하는 것이 기본
+    기대치이지만, 이 함수도 fetch_press_releases(start, today) 호출을 자체
+    try/except로 감싸 그 호출 자체가 예외를 던지더라도 전파하지 않는다. run_id를
+    주지 않으면(단일 소스 수동 실행 등) 새로 생성해 그 자체로 1건짜리 배치가 된다."""
     today = date.today()
     start = today - timedelta(days=days - 1)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -296,9 +297,14 @@ def collect_all_policy_events(
 ) -> dict:
     """국토부/한국부동산원/LH/서울시/HF/HUG/SH 정책 데이터를 순서대로 모두 수집한다.
     소스별 함수가 각자 실패에 안전하므로(예외 대신 빈 리스트/스킵 처리) 한 소스의
-    문제가 다른 소스 수집을 막지 않는다. 스케줄러가 자동 실행할 때도 사용한다.
-    on_progress가 주어지면 소스 하나가 끝날 때마다 (source, result)로 호출된다.
-    7개 소스 모두 같은 run_id로 이력에 기록되어 "수집 이력"에서 1세트로 묶인다."""
+    문제가 다른 소스 수집을 막지 않는다. 이에 더해 이 함수는 각 소스의
+    collect_fn 호출 전체(fetch뿐 아니라 DB 저장까지)를 개별 try/except로 감싸,
+    fetch 계층에서 걸러지지 않은 예기치 못한 예외(예: DB 쓰기 실패)가 나더라도
+    해당 소스만 {"fetched": 0, "inserted": 0, "skipped": 0}으로 처리하고 나머지
+    소스 수집은 계속 진행되도록 하는 바깥쪽 안전망 역할을 한다. 스케줄러가 자동
+    실행할 때도 사용한다. on_progress가 주어지면 소스 하나가 끝날 때마다
+    (source, result)로 호출된다. 7개 소스 모두 같은 run_id로 이력에 기록되어
+    "수집 이력"에서 1세트로 묶인다."""
     run_id = run_id or str(uuid.uuid4())[:8]
     sources = [
         ("국토부", collect_molit_press_releases),
@@ -311,7 +317,10 @@ def collect_all_policy_events(
     ]
     results = {}
     for source, collect_fn in sources:
-        result = collect_fn(days=days, trigger=trigger, run_id=run_id)
+        try:
+            result = collect_fn(days=days, trigger=trigger, run_id=run_id)
+        except Exception:
+            result = {"fetched": 0, "inserted": 0, "skipped": 0}
         results[source] = result
         if on_progress is not None:
             on_progress(source, result)
