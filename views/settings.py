@@ -581,7 +581,7 @@ def _show_mention_detail(row):
         st.write(row["본문"])
 
 
-def _render_data_management():
+def _render_brand_lookup_tab():
     st.subheader("🗃 수집 데이터 조회")
 
     brands = ["전체"] + [b["name"] for b in load_keywords()["brands"]]
@@ -730,6 +730,121 @@ def _render_data_management():
     if pc5.button("끝 ▶▶", disabled=page >= total_pages, key="lookup_last"):
         st.session_state["lookup_page"] = total_pages
         st.rerun()
+
+
+_POLICY_ROW_COL_RATIOS = [0.3, 0.8, 1.0, 1.0, 4.0, 0.8, 0.6]
+_POLICY_ROW_HEADERS = ["수집처", "등록일", "분류", "제목", "조회수", ""]
+
+
+@st.dialog("정책 상세 정보", width="large")
+def _show_policy_event_detail(row):
+    st.subheader(row["제목"])
+    st.write(
+        f"수집처: {row['수집처']}  |  분류: {row['분류']}  |  "
+        f"등록일: {row['등록일']}  |  조회수: {row['조회수']}"
+    )
+    st.markdown(f"[원문 링크]({row['URL']})")
+
+
+def _render_policy_lookup_tab():
+    """정부 정책 탭 전용 필터+표+삭제 UI. policy_events는 브랜드/채널/게시일 개념이
+    없어 _render_brand_lookup_tab과 컬럼 구성이 다르다(등록일/분류/제목/조회수)."""
+    departments = ["전체"] + sorted({e["department"] for e in db.get_policy_events() if e["department"]})
+    selected_department = st.selectbox("분류", departments, key="policy_lookup_department")
+    title_search = st.text_input("제목 검색", placeholder="검색어 입력...", key="policy_lookup_title_search")
+
+    default_range_start = date.today() - timedelta(days=29)
+    default_range_end = date.today()
+    col_date_filter, col_date_start, col_date_end = st.columns(3)
+    with col_date_filter:
+        filter_by_date = st.checkbox("등록일로 필터링", key="policy_lookup_filter_by_date")
+    with col_date_start:
+        date_start = st.date_input(
+            "등록일 시작", value=default_range_start,
+            key="policy_lookup_date_start", disabled=not filter_by_date,
+        )
+    with col_date_end:
+        date_end = st.date_input(
+            "등록일 종료", value=default_range_end,
+            key="policy_lookup_date_end", disabled=not filter_by_date,
+        )
+
+    events = db.get_policy_events(
+        department="" if selected_department == "전체" else selected_department,
+    )
+    df = pd.DataFrame(
+        events,
+        columns=["id", "source", "title", "url", "department", "announced_at", "view_count"],
+    ).rename(columns={
+        "source": "수집처", "title": "제목", "url": "URL", "department": "분류",
+        "announced_at": "등록일", "view_count": "조회수",
+    })
+
+    if title_search:
+        df = df[df["제목"].str.contains(title_search, case=False, na=False)]
+    if filter_by_date:
+        df = df[
+            (df["등록일"] >= date_start.isoformat())
+            & (df["등록일"] <= date_end.isoformat())
+        ]
+
+    total = len(df)
+    st.markdown(f"#### 조회 결과 ({total}건)")
+
+    if df.empty:
+        st.caption("조회된 데이터가 없습니다.")
+    else:
+        header_cols = st.columns([0.5] + _POLICY_ROW_COL_RATIOS[1:])
+        for label, col in zip(_POLICY_ROW_HEADERS, header_cols[1:]):
+            col.markdown(f"**{label}**")
+
+        for _, row in df.iterrows():
+            row_id = int(row["id"])
+            cols = st.columns([0.5] + _POLICY_ROW_COL_RATIOS[1:])
+            cols[0].checkbox("", key=f"policy_lookup_row_select_{row_id}", label_visibility="collapsed")
+            cols[1].markdown(str(row["수집처"]))
+            cols[2].markdown(str(row["등록일"]))
+            cols[3].markdown(str(row["분류"]))
+            title_text = str(row["제목"]).replace("<", "&lt;").replace(">", "&gt;")
+            cols[4].markdown(
+                f'<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" '
+                f'title="{title_text}">{title_text}</div>',
+                unsafe_allow_html=True,
+            )
+            cols[5].markdown(str(row["조회수"]))
+            if cols[6].button("보기", key=f"policy_lookup_view_{row_id}", use_container_width=True):
+                _show_policy_event_detail(row)
+
+    selected_ids = [
+        int(row["id"]) for _, row in df.iterrows()
+        if st.session_state.get(f"policy_lookup_row_select_{int(row['id'])}", False)
+    ]
+
+    del_col, count_col = st.columns([1, 5])
+    if del_col.button("🗑 선택 삭제", key="policy_lookup_delete_button", disabled=not selected_ids):
+        deleted = db.delete_policy_events(selected_ids)
+        st.success(f"{deleted}건 삭제했습니다.")
+        st.rerun()
+    count_col.caption(f"선택된 항목: {len(selected_ids)}건")
+
+    delete_all_confirm = st.checkbox(
+        "⚠️ 전체 삭제에 동의합니다 (필터와 무관하게 모든 정책 데이터가 삭제됩니다)",
+        key="policy_lookup_delete_all_confirm",
+    )
+    if st.button(
+        "🗑️ 전체 삭제", key="policy_lookup_delete_all_button", disabled=not delete_all_confirm,
+    ):
+        deleted = db.delete_all_policy_events()
+        st.success(f"전체 {deleted}건을 삭제했습니다.")
+        st.rerun()
+
+
+def _render_data_management():
+    tab_existing, tab_policy = st.tabs(["📰 신규 게시물", "🏛️ 정부 정책"])
+    with tab_existing:
+        _render_brand_lookup_tab()
+    with tab_policy:
+        _render_policy_lookup_tab()
 
 
 # ── 메인 진입점 ────────────────────────────────────────────────────────────
