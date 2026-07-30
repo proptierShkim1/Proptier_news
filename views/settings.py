@@ -498,6 +498,11 @@ def _render_policy_collection_tab():
         st.caption(f"등록된 시각: {', '.join(policy_sched_cfg['times'])}")
     else:
         st.caption("등록된 수집 시각이 없습니다.")
+        st.warning(
+            "⚠️ 정책 데이터 자동 수집 시각이 설정되어 있지 않습니다. "
+            "시각을 등록하기 전까지는 스케줄러가 자동으로 실행되지 않으니, "
+            "위 시각을 등록하거나 아래 '지금 수집' 버튼으로 수동 수집하세요."
+        )
 
     st.divider()
 
@@ -556,6 +561,42 @@ def _render_data_collection():
 _PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
 _ROW_COL_RATIOS = [0.5, 1.0, 1.0, 0.7, 0.6, 0.6, 4.0, 0.6]
 _ROW_HEADERS = ["수집일시", "게시일", "브랜드", "채널", "구분", "제목", ""]
+
+
+def _paginate_df(df: pd.DataFrame, filter_sig: tuple, page_size: int, key_prefix: str):
+    """조회 탭(브랜드/정책 공용) 페이지네이션 상태 관리. filter_sig(필터+표시개수 조합)가
+    바뀌면 1페이지로 리셋하고, 그렇지 않으면 세션에 저장된 현재 페이지를 유지한다.
+    key_prefix가 서로 다르면(예: "lookup" vs "policy_lookup") 세션 키가 겹치지 않는다.
+    반환값: (현재 페이지의 df 슬라이스, 현재 페이지 번호, 전체 페이지 수)."""
+    total = len(df)
+    if st.session_state.get(f"{key_prefix}_filter_sig") != filter_sig:
+        st.session_state[f"{key_prefix}_filter_sig"] = filter_sig
+        st.session_state[f"{key_prefix}_page"] = 1
+
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = min(st.session_state.get(f"{key_prefix}_page", 1), total_pages)
+    st.session_state[f"{key_prefix}_page"] = page
+    start = (page - 1) * page_size
+    end = min(start + page_size, total)
+    return df.iloc[start:end], page, total_pages
+
+
+def _render_pagination_controls(key_prefix: str, page: int, total_pages: int) -> None:
+    """_paginate_df와 짝을 이루는 처음/이전/다음/끝 버튼 행. key_prefix로 세션 키를 구분한다."""
+    pc1, pc2, pc3, pc4, pc5 = st.columns([1, 1, 2, 1, 1])
+    if pc1.button("◀◀ 처음", disabled=page <= 1, key=f"{key_prefix}_first"):
+        st.session_state[f"{key_prefix}_page"] = 1
+        st.rerun()
+    if pc2.button("◀ 이전", disabled=page <= 1, key=f"{key_prefix}_prev"):
+        st.session_state[f"{key_prefix}_page"] -= 1
+        st.rerun()
+    pc3.markdown(f"<div style='text-align:center;padding-top:6px'>{page} / {total_pages} 페이지</div>", unsafe_allow_html=True)
+    if pc4.button("다음 ▶", disabled=page >= total_pages, key=f"{key_prefix}_next"):
+        st.session_state[f"{key_prefix}_page"] += 1
+        st.rerun()
+    if pc5.button("끝 ▶▶", disabled=page >= total_pages, key=f"{key_prefix}_last"):
+        st.session_state[f"{key_prefix}_page"] = total_pages
+        st.rerun()
 
 
 def _match_type(brand: str, search_term: str) -> str:
@@ -647,16 +688,7 @@ def _render_brand_lookup_tab():
 
     filter_sig = (selected_brand, selected_channel, page_size, title_search,
                   filter_by_collected, collected_start, collected_end)
-    if st.session_state.get("lookup_filter_sig") != filter_sig:
-        st.session_state["lookup_filter_sig"] = filter_sig
-        st.session_state["lookup_page"] = 1
-
-    total_pages = max(1, (total + page_size - 1) // page_size)
-    page = min(st.session_state.get("lookup_page", 1), total_pages)
-    st.session_state["lookup_page"] = page
-    start = (page - 1) * page_size
-    end = min(start + page_size, total)
-    page_df = df.iloc[start:end]
+    page_df, page, total_pages = _paginate_df(df, filter_sig, page_size, "lookup")
     page_ids = [int(i) for i in page_df["id"].tolist()]
 
     page_sig = (filter_sig, page)
@@ -716,20 +748,7 @@ def _render_brand_lookup_tab():
         st.rerun()
 
     st.divider()
-    pc1, pc2, pc3, pc4, pc5 = st.columns([1, 1, 2, 1, 1])
-    if pc1.button("◀◀ 처음", disabled=page <= 1, key="lookup_first"):
-        st.session_state["lookup_page"] = 1
-        st.rerun()
-    if pc2.button("◀ 이전", disabled=page <= 1, key="lookup_prev"):
-        st.session_state["lookup_page"] -= 1
-        st.rerun()
-    pc3.markdown(f"<div style='text-align:center;padding-top:6px'>{page} / {total_pages} 페이지</div>", unsafe_allow_html=True)
-    if pc4.button("다음 ▶", disabled=page >= total_pages, key="lookup_next"):
-        st.session_state["lookup_page"] += 1
-        st.rerun()
-    if pc5.button("끝 ▶▶", disabled=page >= total_pages, key="lookup_last"):
-        st.session_state["lookup_page"] = total_pages
-        st.rerun()
+    _render_pagination_controls("lookup", page, total_pages)
 
 
 _POLICY_ROW_COL_RATIOS = [0.3, 0.8, 1.0, 1.0, 4.0, 0.8, 0.6]
@@ -748,9 +767,16 @@ def _show_policy_event_detail(row):
 
 def _render_policy_lookup_tab():
     """정부 정책 탭 전용 필터+표+삭제 UI. policy_events는 브랜드/채널/게시일 개념이
-    없어 _render_brand_lookup_tab과 컬럼 구성이 다르다(등록일/분류/제목/조회수)."""
+    없어 _render_brand_lookup_tab과 컬럼 구성이 다르지만(등록일/분류/제목/조회수),
+    페이지네이션은 _paginate_df/_render_pagination_controls를 공유해 브랜드 탭과
+    동일한 처음/이전/다음/끝 방식으로 동작한다(연 단위 스케줄 수집 시 수천 건이
+    한 번에 렌더링되는 것을 방지)."""
     departments = ["전체"] + sorted({e["department"] for e in db.get_policy_events() if e["department"]})
-    selected_department = st.selectbox("분류", departments, key="policy_lookup_department")
+    col_dept, col_size = st.columns(2)
+    with col_dept:
+        selected_department = st.selectbox("분류", departments, key="policy_lookup_department")
+    with col_size:
+        page_size = st.selectbox("표시 개수", _PAGE_SIZE_OPTIONS, key="policy_lookup_page_size")
     title_search = st.text_input("제목 검색", placeholder="검색어 입력...", key="policy_lookup_title_search")
 
     default_range_start = date.today() - timedelta(days=29)
@@ -791,14 +817,19 @@ def _render_policy_lookup_tab():
     total = len(df)
     st.markdown(f"#### 조회 결과 ({total}건)")
 
-    if df.empty:
+    filter_sig = (selected_department, page_size, title_search,
+                  filter_by_date, date_start, date_end)
+    page_df, page, total_pages = _paginate_df(df, filter_sig, page_size, "policy_lookup")
+    page_ids = [int(i) for i in page_df["id"].tolist()]
+
+    if page_df.empty:
         st.caption("조회된 데이터가 없습니다.")
     else:
         header_cols = st.columns([0.5] + _POLICY_ROW_COL_RATIOS[1:])
         for label, col in zip(_POLICY_ROW_HEADERS, header_cols[1:]):
             col.markdown(f"**{label}**")
 
-        for _, row in df.iterrows():
+        for _, row in page_df.iterrows():
             row_id = int(row["id"])
             cols = st.columns([0.5] + _POLICY_ROW_COL_RATIOS[1:])
             cols[0].checkbox("", key=f"policy_lookup_row_select_{row_id}", label_visibility="collapsed")
@@ -816,8 +847,8 @@ def _render_policy_lookup_tab():
                 _show_policy_event_detail(row)
 
     selected_ids = [
-        int(row["id"]) for _, row in df.iterrows()
-        if st.session_state.get(f"policy_lookup_row_select_{int(row['id'])}", False)
+        row_id for row_id in page_ids
+        if st.session_state.get(f"policy_lookup_row_select_{row_id}", False)
     ]
 
     del_col, count_col = st.columns([1, 5])
@@ -837,6 +868,9 @@ def _render_policy_lookup_tab():
         deleted = db.delete_all_policy_events()
         st.success(f"전체 {deleted}건을 삭제했습니다.")
         st.rerun()
+
+    st.divider()
+    _render_pagination_controls("policy_lookup", page, total_pages)
 
 
 def _render_data_management():

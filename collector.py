@@ -301,10 +301,12 @@ def collect_all_policy_events(
     collect_fn 호출 전체(fetch뿐 아니라 DB 저장까지)를 개별 try/except로 감싸,
     fetch 계층에서 걸러지지 않은 예기치 못한 예외(예: DB 쓰기 실패)가 나더라도
     해당 소스만 {"fetched": 0, "inserted": 0, "skipped": 0}으로 처리하고 나머지
-    소스 수집은 계속 진행되도록 하는 바깥쪽 안전망 역할을 한다. 스케줄러가 자동
-    실행할 때도 사용한다. on_progress가 주어지면 소스 하나가 끝날 때마다
-    (source, result)로 호출된다. 7개 소스 모두 같은 run_id로 이력에 기록되어
-    "수집 이력"에서 1세트로 묶인다."""
+    소스 수집은 계속 진행되도록 하는 바깥쪽 안전망 역할을 한다. 이 경우에도
+    policy_run_logs에 ok=0, message=str(e)인 행을 남겨(내부 _collect_press_releases의
+    실패 기록과 동일한 형태) get_policy_run_batches()가 이 배치를 정상(ok=1)으로
+    잘못 집계하지 않도록 한다. 스케줄러가 자동 실행할 때도 사용한다. on_progress가
+    주어지면 소스 하나가 끝날 때마다 (source, result)로 호출된다. 7개 소스 모두
+    같은 run_id로 이력에 기록되어 "수집 이력"에서 1세트로 묶인다."""
     run_id = run_id or str(uuid.uuid4())[:8]
     sources = [
         ("국토부", collect_molit_press_releases),
@@ -319,8 +321,13 @@ def collect_all_policy_events(
     for source, collect_fn in sources:
         try:
             result = collect_fn(days=days, trigger=trigger, run_id=run_id)
-        except Exception:
+        except Exception as e:
             result = {"fetched": 0, "inserted": 0, "skipped": 0}
+            db.insert_policy_run_log({
+                "ran_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "trigger": trigger, "source": source, "run_id": run_id,
+                "ok": 0, "message": str(e), **result,
+            })
         results[source] = result
         if on_progress is not None:
             on_progress(source, result)

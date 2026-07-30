@@ -6,5 +6,6 @@ data/access_config.json
 data/news.db
 data/keywords.json
 data/collection_schedule.json
+data/policy_collection_schedule.json
 data/deploy_log.jsonl
 data/scheduler.log

@@ -225,14 +225,14 @@ def insert_policy_event(record: dict) -> bool:
         return cur.rowcount > 0
 
 
-def get_policy_events(department: str = "") -> list[dict]:
+def get_policy_events(department: str = "", limit: int = 3000) -> list[dict]:
     init_db()
     query = "SELECT * FROM policy_events WHERE 1=1"
-    params = {}
+    params = {"limit": limit}
     if department:
         query += " AND department = :department"
         params["department"] = department
-    query += " ORDER BY announced_at DESC"
+    query += " ORDER BY announced_at DESC LIMIT :limit"
     with sqlite3.connect(DB_PATH) as con:
         con.row_factory = sqlite3.Row
         rows = con.execute(query, params).fetchall()

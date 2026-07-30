@@ -216,6 +216,19 @@ def test_collect_all_policy_events_one_collect_fn_raising_does_not_block_others(
     events = db.get_policy_events()
     assert len(events) == 6
 
+    # 바깥쪽 안전망이 예외를 삼키고 마는 게 아니라, 내부 _collect_press_releases의
+    # 실패 기록과 동일하게 policy_run_logs에 ok=0/message를 남겨야 한다. 그래야
+    # get_policy_run_batches()가 이 배치를 정상(ok=1)으로 잘못 집계하지 않는다.
+    logs = db.get_policy_run_logs(limit=50)
+    molit_logs = [l for l in logs if l["source"] == "국토부"]
+    assert len(molit_logs) == 1
+    assert molit_logs[0]["ok"] == 0
+    assert "db write failed" in molit_logs[0]["message"]
+
+    batches = db.get_policy_run_batches()
+    batch = next(b for b in batches if "국토부" in b["sources"])
+    assert batch["ok"] == 0
+
 
 def test_collect_all_policy_events_calls_on_progress_per_source(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
