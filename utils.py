@@ -10,6 +10,7 @@ from pathlib import Path
 DATA_DIR = Path(__file__).resolve().parent / "data"
 KEYWORDS_FILE = DATA_DIR / "keywords.json"
 COLLECTION_SCHEDULE_FILE = DATA_DIR / "collection_schedule.json"
+POLICY_COLLECTION_SCHEDULE_FILE = DATA_DIR / "policy_collection_schedule.json"
 
 
 def load_json(path: Path, default):
@@ -62,6 +63,16 @@ def load_collection_schedule() -> dict:
 
 def save_collection_schedule(cfg: dict) -> None:
     save_json(COLLECTION_SCHEDULE_FILE, cfg)
+
+
+def load_policy_collection_schedule() -> dict:
+    cfg = load_json(POLICY_COLLECTION_SCHEDULE_FILE, {"times": []})
+    cfg["times"] = _normalize_schedule_times(cfg.get("times", []))
+    return cfg
+
+
+def save_policy_collection_schedule(cfg: dict) -> None:
+    save_json(POLICY_COLLECTION_SCHEDULE_FILE, cfg)
 
 
 _RELATIVE_KOREAN_DATE_RE = re.compile(r"^(\d+)(분|시간|일)\s*전$")

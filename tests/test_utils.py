@@ -1,0 +1,46 @@
+import json
+from datetime import datetime
+
+from utils import (
+    load_collection_schedule,
+    load_policy_collection_schedule,
+    resolve_relative_korean_date,
+    save_collection_schedule,
+    save_policy_collection_schedule,
+)
+import utils
+
+
+def test_load_policy_collection_schedule_defaults_when_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        utils, "POLICY_COLLECTION_SCHEDULE_FILE", tmp_path / "policy_collection_schedule.json"
+    )
+
+    assert load_policy_collection_schedule() == {"times": []}
+
+
+def test_save_policy_collection_schedule_persists_times(tmp_path, monkeypatch):
+    schedule_file = tmp_path / "policy_collection_schedule.json"
+    monkeypatch.setattr(utils, "POLICY_COLLECTION_SCHEDULE_FILE", schedule_file)
+
+    save_policy_collection_schedule({"times": ["10:00"]})
+
+    assert json.loads(schedule_file.read_text(encoding="utf-8")) == {"times": ["10:00"]}
+
+
+def test_policy_collection_schedule_is_independent_of_brand_schedule(tmp_path, monkeypatch):
+    monkeypatch.setattr(utils, "COLLECTION_SCHEDULE_FILE", tmp_path / "collection_schedule.json")
+    monkeypatch.setattr(
+        utils, "POLICY_COLLECTION_SCHEDULE_FILE", tmp_path / "policy_collection_schedule.json"
+    )
+
+    save_collection_schedule({"times": ["09:00"]})
+    save_policy_collection_schedule({"times": ["10:00"]})
+
+    assert load_collection_schedule() == {"times": ["09:00"]}
+    assert load_policy_collection_schedule() == {"times": ["10:00"]}
+
+
+def test_resolve_relative_korean_date_still_works():
+    now = datetime(2026, 7, 24, 12, 0, 0)
+    assert resolve_relative_korean_date("30분 전", now) == "2026.07.24"
