@@ -6,13 +6,20 @@ import re
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 import db
 from crawlers import daum as daum_crawler
 from crawlers import dcinside as dcinside_crawler
 from crawlers import google as google_crawler
+from crawlers import hf as hf_crawler
+from crawlers import hug as hug_crawler
+from crawlers import lh as lh_crawler
+from crawlers import molit as molit_crawler
 from crawlers import naver as naver_crawler
+from crawlers import reb as reb_crawler
+from crawlers import seoul_opengov as seoul_opengov_crawler
+from crawlers import sh as sh_crawler
 from utils import load_keywords
 
 _CRAWLERS = {
@@ -50,6 +57,10 @@ _CONTENT_FETCH_DELAY_SECONDS = 1
 
 _state_lock = threading.Lock()
 _active_run_id: str | None = None
+
+_policy_state_lock = threading.Lock()
+_active_policy_run_id: str | None = None
+_policy_progress: dict[str, list[dict]] = {}
 
 _HANGUL = re.compile(r"[가-힣]")
 _PARTICLES = sorted([
@@ -203,3 +214,147 @@ def _collect_one(
 
     db.insert_run_log(entry)
     return entry
+
+
+def _collect_press_releases(
+    fetch_press_releases, source: str, days: int, trigger: str = "수동", run_id: str | None = None,
+) -> dict:
+    """모든 정책 소스 수집 함수가 공유하는 fetch→source 태깅→저장→이력 기록 로직.
+    소스별 fetch_press_releases 자체가 실패 시 빈 리스트를 반환해 이 함수는 예외를
+    전파하지 않는다. run_id를 주지 않으면(단일 소스 수동 실행 등) 새로 생성해
+    그 자체로 1건짜리 배치가 된다."""
+    today = date.today()
+    start = today - timedelta(days=days - 1)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        records = fetch_press_releases(start, today)
+        ok, message = 1, ""
+    except Exception as e:
+        records, ok, message = [], 0, str(e)
+
+    inserted = 0
+    skipped = 0
+    for record in records:
+        record["source"] = source
+        record["collected_at"] = now
+        if db.insert_policy_event(record):
+            inserted += 1
+        else:
+            skipped += 1
+
+    result = {"fetched": len(records), "inserted": inserted, "skipped": skipped}
+    db.insert_policy_run_log({
+        "ran_at": now, "trigger": trigger, "source": source, "run_id": run_id or str(uuid.uuid4())[:8],
+        "ok": ok, "message": message, **result,
+    })
+    return result
+
+
+def collect_molit_press_releases(days: int = 30, trigger: str = "수동", run_id: str | None = None) -> dict:
+    """국토교통부 보도자료를 최근 days일치 가져와 저장한다."""
+    return _collect_press_releases(molit_crawler.fetch_press_releases, "국토부", days, trigger, run_id)
+
+
+def collect_reb_press_releases(days: int = 30, trigger: str = "수동", run_id: str | None = None) -> dict:
+    """한국부동산원 보도자료를 최근 days일치 가져와 저장한다."""
+    return _collect_press_releases(
+        reb_crawler.fetch_press_releases, "한국부동산원", days, trigger, run_id
+    )
+
+
+def collect_lh_press_releases(days: int = 30, trigger: str = "수동", run_id: str | None = None) -> dict:
+    """LH 보도자료를 최근 days일치 가져와 저장한다."""
+    return _collect_press_releases(lh_crawler.fetch_press_releases, "LH", days, trigger, run_id)
+
+
+def collect_seoul_opengov_press_releases(
+    days: int = 30, trigger: str = "수동", run_id: str | None = None
+) -> dict:
+    """서울시 정보소통광장 보도자료(주택/도시계획 관련만) 최근 days일치 가져와 저장한다."""
+    return _collect_press_releases(
+        seoul_opengov_crawler.fetch_press_releases, "서울시", days, trigger, run_id
+    )
+
+
+def collect_hf_press_releases(days: int = 30, trigger: str = "수동", run_id: str | None = None) -> dict:
+    """한국주택금융공사(HF) 보도자료를 최근 days일치 가져와 저장한다."""
+    return _collect_press_releases(hf_crawler.fetch_press_releases, "HF", days, trigger, run_id)
+
+
+def collect_hug_press_releases(days: int = 30, trigger: str = "수동", run_id: str | None = None) -> dict:
+    """주택도시보증공사(HUG) 보도자료를 최근 days일치 가져와 저장한다."""
+    return _collect_press_releases(hug_crawler.fetch_press_releases, "HUG", days, trigger, run_id)
+
+
+def collect_sh_press_releases(days: int = 30, trigger: str = "수동", run_id: str | None = None) -> dict:
+    """SH(서울주택도시공사) 보도자료를 최근 days일치 가져와 저장한다."""
+    return _collect_press_releases(sh_crawler.fetch_press_releases, "SH", days, trigger, run_id)
+
+
+def collect_all_policy_events(
+    days: int = 30, on_progress=None, trigger: str = "수동", run_id: str | None = None,
+) -> dict:
+    """국토부/한국부동산원/LH/서울시/HF/HUG/SH 정책 데이터를 순서대로 모두 수집한다.
+    소스별 함수가 각자 실패에 안전하므로(예외 대신 빈 리스트/스킵 처리) 한 소스의
+    문제가 다른 소스 수집을 막지 않는다. 스케줄러가 자동 실행할 때도 사용한다.
+    on_progress가 주어지면 소스 하나가 끝날 때마다 (source, result)로 호출된다.
+    7개 소스 모두 같은 run_id로 이력에 기록되어 "수집 이력"에서 1세트로 묶인다."""
+    run_id = run_id or str(uuid.uuid4())[:8]
+    sources = [
+        ("국토부", collect_molit_press_releases),
+        ("한국부동산원", collect_reb_press_releases),
+        ("LH", collect_lh_press_releases),
+        ("서울시", collect_seoul_opengov_press_releases),
+        ("HF", collect_hf_press_releases),
+        ("HUG", collect_hug_press_releases),
+        ("SH", collect_sh_press_releases),
+    ]
+    results = {}
+    for source, collect_fn in sources:
+        result = collect_fn(days=days, trigger=trigger, run_id=run_id)
+        results[source] = result
+        if on_progress is not None:
+            on_progress(source, result)
+    return results
+
+
+def active_policy_run_id() -> str | None:
+    """start_background_policy_collection()으로 시작된 정책 수집이 아직 진행 중이면
+    그 run_id, 아니면 None. 브랜드 수집(active_run_id)과는 독립적으로 추적된다."""
+    with _policy_state_lock:
+        return _active_policy_run_id
+
+
+def get_policy_progress(run_id: str) -> list[dict]:
+    """start_background_policy_collection()이 진행되며 소스별로 쌓아온 결과 목록을 반환한다."""
+    with _policy_state_lock:
+        return list(_policy_progress.get(run_id, []))
+
+
+def start_background_policy_collection(days: int = 30, trigger: str = "수동") -> str | None:
+    """이미 진행 중인 백그라운드 정책 수집이 없으면 데몬 스레드로 시작하고 run_id를
+    반환한다. 이미 진행 중이면 아무 것도 하지 않고 None을 반환한다(중복 실행 방지).
+    이 run_id는 실시간 진행 조회(get_policy_progress)와 "수집 이력"(db.get_policy_run_batches)에
+    동일하게 쓰인다."""
+    global _active_policy_run_id
+    with _policy_state_lock:
+        if _active_policy_run_id is not None:
+            return None
+        run_id = str(uuid.uuid4())[:8]
+        _active_policy_run_id = run_id
+        _policy_progress[run_id] = []
+
+    def _on_progress(source, result):
+        with _policy_state_lock:
+            _policy_progress[run_id].append({"source": source, **result})
+
+    def _worker():
+        global _active_policy_run_id
+        try:
+            collect_all_policy_events(days=days, on_progress=_on_progress, trigger=trigger, run_id=run_id)
+        finally:
+            with _policy_state_lock:
+                _active_policy_run_id = None
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return run_id
