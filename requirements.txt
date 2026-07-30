@@ -5,3 +5,4 @@ requests
 beautifulsoup4
 pandas
 playwright
+pytest>=8.0.0
