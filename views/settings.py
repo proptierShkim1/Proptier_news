@@ -15,8 +15,10 @@ from access_control import load_config, save_config, name_for_ip
 from utils import (
     load_collection_schedule,
     load_keywords,
+    load_policy_collection_schedule,
     save_collection_schedule,
     save_keywords,
+    save_policy_collection_schedule,
 )
 
 ROOT = Path(__file__).parent.parent
@@ -308,7 +310,7 @@ def _show_collection_progress(run_id):
         st.success(f"수집 완료: {len(logs)}건 실행, 성공 {ok_count}건")
 
 
-def _render_data_collection():
+def _render_brand_collection_tab():
     st.subheader("🏷️ 키워드 관리")
     st.caption("네이버·구글·다음·커뮤니티(디시인사이드) 4개 채널에서 수집합니다. API 키 불필요.")
     kw_cfg = load_keywords()
@@ -428,6 +430,125 @@ def _render_data_collection():
         st.dataframe(batch_df, use_container_width=True, hide_index=True)
     else:
         st.caption("아직 수집 이력이 없습니다.")
+
+
+_POLICY_SOURCE_SECTIONS = [
+    ("policy_collect_now", "🏛️ 국토교통부 보도자료", "국토교통부 보도자료를 수집합니다.",
+     collector.collect_molit_press_releases),
+    ("policy_reb_collect_now", "🏢 한국부동산원 보도자료", "한국부동산원 보도자료(가격동향 등)를 수집합니다.",
+     collector.collect_reb_press_releases),
+    ("policy_lh_collect_now", "🏗️ LH(한국토지주택공사) 보도자료", "LH 보도자료(공급·보상·사업 진행 등)를 수집합니다.",
+     collector.collect_lh_press_releases),
+    ("policy_seoul_collect_now", "🏙️ 서울시 정보소통광장 보도자료", "서울시 보도자료 중 주택/도시계획 관련만 수집합니다.",
+     collector.collect_seoul_opengov_press_releases),
+    ("policy_hf_collect_now", "🏦 HF(한국주택금융공사) 보도자료", "HF 보도자료(주택담보대출·보금자리론 등)를 수집합니다.",
+     collector.collect_hf_press_releases),
+    ("policy_hug_collect_now", "🛡️ HUG(주택도시보증공사) 보도자료", "HUG 보도자료(전세보증·분양보증 등)를 수집합니다.",
+     collector.collect_hug_press_releases),
+    ("policy_sh_collect_now", "🏘️ SH(서울주택도시공사) 보도자료", "SH 보도자료(공공주택 공급·정비사업 등)를 수집합니다.",
+     collector.collect_sh_press_releases),
+]
+
+_POLICY_SOURCE_COUNT = 7
+
+
+@st.fragment(run_every=2)
+def _show_policy_collection_progress(run_id):
+    entries = collector.get_policy_progress(run_id)
+    if entries:
+        st.dataframe(
+            pd.DataFrame([
+                {"수집처": e["source"], "조회": e["fetched"], "신규": e["inserted"], "중복": e["skipped"]}
+                for e in entries
+            ]),
+            use_container_width=True, hide_index=True,
+        )
+    if collector.active_policy_run_id() == run_id:
+        st.caption(f"🔄 진행 중... ({len(entries)}/{_POLICY_SOURCE_COUNT}곳 완료)")
+    else:
+        total_fetched = sum(e["fetched"] for e in entries)
+        total_inserted = sum(e["inserted"] for e in entries)
+        st.success(f"전체 완료 — {total_fetched}건 조회, 신규 {total_inserted}건")
+
+
+def _render_policy_collection_tab():
+    st.caption(
+        "국토교통부·한국부동산원·LH·서울시·HF·HUG·SH 7곳 보도자료를 수집합니다. "
+        "신규 게시물과 별도의 독립된 스케줄을 가집니다."
+    )
+    st.subheader("⏰ 수집 스케줄")
+    policy_sched_cfg = load_policy_collection_schedule()
+    policy_times_text = st.text_input(
+        "수집 시각 (/로 구분)", value="/".join(policy_sched_cfg["times"]),
+        placeholder="예: 09:00/13:00/17:00", key="policy_sched_times_text",
+    )
+    if st.button("💾 저장", key="policy_sched_save"):
+        tokens = [t.strip() for t in policy_times_text.split("/") if t.strip()]
+        invalid = [t for t in tokens if not _TIME_RE.match(t)]
+        if invalid:
+            st.error(f"HH:MM 형식이 아닌 시각이 있습니다: {', '.join(invalid)}")
+        else:
+            seen = []
+            for t in tokens:
+                if t not in seen:
+                    seen.append(t)
+            save_policy_collection_schedule({"times": seen})
+            st.rerun()
+    if policy_sched_cfg["times"]:
+        st.caption(f"등록된 시각: {', '.join(policy_sched_cfg['times'])}")
+    else:
+        st.caption("등록된 수집 시각이 없습니다.")
+
+    st.divider()
+
+    running_policy_run_id = collector.active_policy_run_id()
+    if running_policy_run_id is None:
+        if st.button("🔄 7곳 전체 지금 수집", key="policy_collect_all_now", type="primary"):
+            started_run_id = collector.start_background_policy_collection(days=30)
+            if started_run_id:
+                st.session_state["watched_policy_run_id"] = started_run_id
+                st.rerun()
+            else:
+                st.warning("이미 다른 정책 수집이 진행 중입니다.")
+    else:
+        st.info("🔄 정책 수집이 진행 중입니다. 페이지를 벗어나거나 새로고침해도 계속 진행됩니다.")
+        st.session_state["watched_policy_run_id"] = running_policy_run_id
+
+    display_policy_run_id = running_policy_run_id or st.session_state.get("watched_policy_run_id")
+    if display_policy_run_id:
+        _show_policy_collection_progress(display_policy_run_id)
+
+    with st.expander("소스별로 하나씩 수집하기"):
+        for i, (key, title, caption, collect_fn) in enumerate(_POLICY_SOURCE_SECTIONS):
+            st.markdown(f"#### {title}")
+            st.caption(caption)
+            if st.button("🔄 지금 수집", key=key):
+                result = collect_fn(days=30)
+                st.success(
+                    f"{result['fetched']}건 조회 (신규 {result['inserted']}, "
+                    f"중복 {result['skipped']})"
+                )
+            if i < len(_POLICY_SOURCE_SECTIONS) - 1:
+                st.divider()
+
+    st.divider()
+    st.subheader("📜 수집 이력")
+    policy_batches = db.get_policy_run_batches(limit=50)
+    if policy_batches:
+        policy_batch_df = pd.DataFrame(policy_batches)[
+            ["ran_at", "trigger", "sources", "fetched", "inserted", "skipped", "ok", "message"]
+        ]
+        st.dataframe(policy_batch_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("아직 수집 이력이 없습니다.")
+
+
+def _render_data_collection():
+    tab_existing, tab_policy = st.tabs(["📰 신규 게시물", "🏛️ 정부 정책"])
+    with tab_existing:
+        _render_brand_collection_tab()
+    with tab_policy:
+        _render_policy_collection_tab()
 
 
 # ── 데이터 관리(조회) ───────────────────────────────────────────────────────
