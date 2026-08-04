@@ -15,9 +15,11 @@ from access_control import load_config, save_config, name_for_ip
 from utils import (
     load_collection_schedule,
     load_keywords,
+    load_naver_news_collection_schedule,
     load_policy_collection_schedule,
     save_collection_schedule,
     save_keywords,
+    save_naver_news_collection_schedule,
     save_policy_collection_schedule,
 )
 
@@ -421,7 +423,7 @@ def _render_brand_collection_tab():
 
     st.divider()
     st.subheader("📜 수집 이력")
-    batches = db.get_run_batches(limit=50)
+    batches = db.get_run_batches(limit=50, channels=["네이버", "구글", "다음", "커뮤니티"])
     if batches:
         batch_df = pd.DataFrame(batches)[
             ["ran_at", "trigger", "brands", "channels", "combinations",
@@ -469,6 +471,84 @@ def _show_policy_collection_progress(run_id):
         total_fetched = sum(e["fetched"] for e in entries)
         total_inserted = sum(e["inserted"] for e in entries)
         st.success(f"전체 완료 — {total_fetched}건 조회, 신규 {total_inserted}건")
+
+
+@st.fragment(run_every=2)
+def _show_naver_news_collection_progress(run_id):
+    logs = [l for l in db.get_run_logs(limit=500) if l["run_id"] == run_id][::-1]
+    if logs:
+        lines = [f"{e['brand']}: {_format_entry_status(e)}" for e in logs]
+        st.code("\n".join(lines), language=None, height=200)
+    if collector.active_naver_news_run_id() == run_id:
+        st.caption(f"🔄 진행 중... ({len(logs)}건 완료)")
+    else:
+        ok_count = sum(1 for e in logs if e["ok"])
+        st.success(f"수집 완료: {len(logs)}건 실행, 성공 {ok_count}건")
+
+
+def _render_naver_news_collection_tab():
+    st.caption(
+        "네이버 공식 뉴스 검색 API로 수집합니다. 키워드 관리의 키워드를 그대로 "
+        "사용하며, 신규 게시물과 별도의 독립된 스케줄을 가집니다."
+    )
+    if not os.getenv("NAVER_CLIENT_ID") or not os.getenv("NAVER_CLIENT_SECRET"):
+        st.warning(
+            "⚠️ .env에 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET이 설정되어 있지 않습니다. "
+            "네이버 개발자센터에서 애플리케이션을 등록해 값을 발급받은 뒤 .env에 "
+            "추가해야 수집이 동작합니다."
+        )
+
+    st.subheader("⏰ 수집 스케줄")
+    naver_news_sched_cfg = load_naver_news_collection_schedule()
+    naver_news_times_text = st.text_input(
+        "수집 시각 (/로 구분)", value="/".join(naver_news_sched_cfg["times"]),
+        placeholder="예: 09:00/13:00/17:00", key="naver_news_sched_times_text",
+    )
+    if st.button("💾 저장", key="naver_news_sched_save"):
+        tokens = [t.strip() for t in naver_news_times_text.split("/") if t.strip()]
+        invalid = [t for t in tokens if not _TIME_RE.match(t)]
+        if invalid:
+            st.error(f"HH:MM 형식이 아닌 시각이 있습니다: {', '.join(invalid)}")
+        else:
+            seen = []
+            for t in tokens:
+                if t not in seen:
+                    seen.append(t)
+            save_naver_news_collection_schedule({"times": seen})
+            st.rerun()
+    if naver_news_sched_cfg["times"]:
+        st.caption(f"등록된 시각: {', '.join(naver_news_sched_cfg['times'])}")
+    else:
+        st.caption("등록된 수집 시각이 없습니다.")
+
+    st.divider()
+    running_naver_news_run_id = collector.active_naver_news_run_id()
+    if running_naver_news_run_id is None:
+        if st.button("🔄 지금 수집", type="primary", key="naver_news_collect_now"):
+            started_run_id = collector.start_background_naver_news_collection(trigger="수동")
+            if started_run_id:
+                st.session_state["watched_naver_news_run_id"] = started_run_id
+                st.rerun()
+            else:
+                st.warning("이미 다른 네이버뉴스 수집이 진행 중입니다.")
+    else:
+        st.info("🔄 수집이 진행 중입니다. 페이지를 벗어나거나 새로고침해도 계속 진행됩니다.")
+        st.session_state["watched_naver_news_run_id"] = running_naver_news_run_id
+
+    display_naver_news_run_id = running_naver_news_run_id or st.session_state.get("watched_naver_news_run_id")
+    if display_naver_news_run_id:
+        _show_naver_news_collection_progress(display_naver_news_run_id)
+
+    st.divider()
+    st.subheader("📜 수집 이력")
+    naver_news_batches = db.get_run_batches(limit=50, channels=["네이버뉴스"])
+    if naver_news_batches:
+        naver_news_batch_df = pd.DataFrame(naver_news_batches)[
+            ["ran_at", "trigger", "brands", "combinations", "fetched", "inserted", "skipped", "ok", "message"]
+        ]
+        st.dataframe(naver_news_batch_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("아직 수집 이력이 없습니다.")
 
 
 def _render_policy_collection_tab():
@@ -549,9 +629,13 @@ def _render_policy_collection_tab():
 
 
 def _render_data_collection():
-    tab_existing, tab_policy = st.tabs(["📰 신규 게시물", "🏛️ 정부 정책"])
+    tab_existing, tab_naver_news, tab_policy = st.tabs(
+        ["📰 신규 게시물", "📡 네이버뉴스 API", "🏛️ 정부 정책"]
+    )
     with tab_existing:
         _render_brand_collection_tab()
+    with tab_naver_news:
+        _render_naver_news_collection_tab()
     with tab_policy:
         _render_policy_collection_tab()
 
@@ -626,7 +710,7 @@ def _render_brand_lookup_tab():
     st.subheader("🗃 수집 데이터 조회")
 
     brands = ["전체"] + [b["name"] for b in load_keywords()["brands"]]
-    channels = ["전체", "네이버", "구글", "다음", "커뮤니티"]
+    channels = ["전체", "네이버", "구글", "다음", "커뮤니티", "네이버뉴스"]
 
     col_brand, col_channel, col_size = st.columns(3)
     with col_brand:
