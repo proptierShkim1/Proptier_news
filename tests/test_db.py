@@ -93,6 +93,13 @@ def test_delete_all_policy_events_never_touches_mentions_table(tmp_path, monkeyp
     assert len(db.get_mentions()) == 1  # mentions는 그대로 남아있어야 함
 
 
+def _run_log_entry(brand="프롭티어", channel="네이버", run_id="batch1", ran_at="2026-08-04 09:00:00"):
+    return {
+        "ran_at": ran_at, "trigger": "수동", "brand": brand, "channel": channel,
+        "fetched": 1, "inserted": 1, "skipped": 0, "ok": 1, "message": "", "run_id": run_id,
+    }
+
+
 def _policy_run_log_entry(source="국토부", ok=1, run_id="batch1"):
     return {
         "ran_at": "2026-07-28 09:00:00",
@@ -166,3 +173,27 @@ def test_get_policy_run_batches_marks_ok_false_when_any_source_failed(tmp_path, 
 
     assert batches[0]["ok"] == 0
     assert "타임아웃" in batches[0]["message"]
+
+
+def test_get_run_batches_without_channels_filter_returns_everything(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_run_log(_run_log_entry(channel="네이버", run_id="batch1", ran_at="2026-08-04 09:00:00"))
+    db.insert_run_log(_run_log_entry(channel="네이버뉴스", run_id="batch2", ran_at="2026-08-04 10:00:00"))
+
+    batches = db.get_run_batches()
+
+    assert len(batches) == 2
+
+
+def test_get_run_batches_channels_filter_only_includes_matching_channels(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_run_log(_run_log_entry(channel="네이버", run_id="batch1", ran_at="2026-08-04 09:00:00"))
+    db.insert_run_log(_run_log_entry(channel="네이버뉴스", run_id="batch2", ran_at="2026-08-04 10:00:00"))
+
+    brand_batches = db.get_run_batches(channels=["네이버", "구글", "다음", "커뮤니티"])
+    naver_news_batches = db.get_run_batches(channels=["네이버뉴스"])
+
+    assert len(brand_batches) == 1
+    assert brand_batches[0]["channels"] == "네이버"
+    assert len(naver_news_batches) == 1
+    assert naver_news_batches[0]["channels"] == "네이버뉴스"
