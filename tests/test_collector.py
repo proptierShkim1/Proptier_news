@@ -8,6 +8,7 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setattr(collector, "_active_policy_run_id", None)
     monkeypatch.setattr(collector, "_policy_progress", {})
+    monkeypatch.setattr(collector, "_active_naver_news_run_id", None)
 
 
 def _fake_release(url, announced_at="2026-07-20"):
@@ -320,3 +321,104 @@ def test_start_background_policy_collection_returns_none_when_already_running(tm
     assert second_run_id is None
     blocker.append(1)
     assert _wait_until(lambda: collector.active_policy_run_id() is None)
+
+
+def _fake_naver_news_record(url, term="프롭티어"):
+    return {
+        "source_detail": "뉴스", "title": f"{term} 관련 뉴스", "url": url,
+        "snippet": f"{term} 관련 요약", "posted_at": "2026.08.04",
+    }
+
+
+def _naver_news_keywords():
+    return {"brands": [{"name": "프롭티어", "role": "own"}], "context": [], "exclude": []}
+
+
+def test_run_naver_news_collection_saves_records_tagged_with_naver_news_channel(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(collector, "load_keywords", _naver_news_keywords)
+    monkeypatch.setattr(
+        collector.naver_news_api_crawler, "search",
+        lambda term: [_fake_naver_news_record("https://x/1", term)],
+    )
+
+    entries = collector.run_naver_news_collection()
+
+    assert len(entries) == 1
+    assert entries[0]["channel"] == "네이버뉴스"
+    mentions = db.get_mentions(channel="네이버뉴스")
+    assert len(mentions) == 1
+    assert mentions[0]["content"] == ""
+
+
+def test_run_naver_news_collection_skips_duplicate_urls(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(collector, "load_keywords", _naver_news_keywords)
+    monkeypatch.setattr(
+        collector.naver_news_api_crawler, "search",
+        lambda term: [_fake_naver_news_record("https://x/1", term), _fake_naver_news_record("https://x/1", term)],
+    )
+
+    entries = collector.run_naver_news_collection()
+
+    assert entries[0]["fetched"] == 2
+    assert entries[0]["inserted"] == 1
+    assert entries[0]["skipped"] == 1
+
+
+def test_run_naver_news_collection_is_independent_of_brand_and_policy_state(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(collector, "load_keywords", _naver_news_keywords)
+    monkeypatch.setattr(collector.naver_news_api_crawler, "search", lambda term: [])
+
+    collector.run_naver_news_collection()
+
+    assert collector.active_run_id() is None
+    assert collector.active_policy_run_id() is None
+
+
+def test_active_naver_news_run_id_is_none_when_nothing_running(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+
+    assert collector.active_naver_news_run_id() is None
+
+
+def test_start_background_naver_news_collection_runs_and_completes(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(collector, "load_keywords", _naver_news_keywords)
+    monkeypatch.setattr(
+        collector.naver_news_api_crawler, "search",
+        lambda term: [_fake_naver_news_record("https://x/1", term)],
+    )
+
+    run_id = collector.start_background_naver_news_collection()
+
+    assert run_id is not None
+    assert _wait_until(lambda: collector.active_naver_news_run_id() is None)
+    mentions = db.get_mentions(channel="네이버뉴스")
+    assert len(mentions) == 1
+
+
+def test_start_background_naver_news_collection_returns_none_when_already_running(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(collector, "load_keywords", _naver_news_keywords)
+    started = []
+    blocker = []
+
+    def slow_search(term):
+        started.append(1)
+        while not blocker:
+            time.sleep(0.01)
+        return []
+
+    monkeypatch.setattr(collector.naver_news_api_crawler, "search", slow_search)
+
+    first_run_id = collector.start_background_naver_news_collection()
+    assert _wait_until(lambda: len(started) == 1, timeout=1.0)
+    assert _wait_until(lambda: collector.active_naver_news_run_id() == first_run_id, timeout=1.0)
+
+    second_run_id = collector.start_background_naver_news_collection()
+
+    assert second_run_id is None
+    blocker.append(1)
+    assert _wait_until(lambda: collector.active_naver_news_run_id() is None)
