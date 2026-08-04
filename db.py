@@ -158,14 +158,21 @@ def get_run_logs(limit: int = 50) -> list[dict]:
 _LEGACY_BATCH_GAP_SECONDS = 300
 
 
-def get_run_batches(limit: int = 50) -> list[dict]:
-    """수집 실행을 건바이건이 아니라 run_id 기준 1세트로 묶어서 반환한다."""
+def get_run_batches(limit: int = 50, channels: list[str] | None = None) -> list[dict]:
+    """수집 실행을 건바이건이 아니라 run_id 기준 1세트로 묶어서 반환한다.
+    channels가 주어지면 그 채널들만 포함된 run_logs 행만 대상으로 한다."""
     init_db()
+    query = "SELECT * FROM run_logs"
+    params: dict = {}
+    if channels:
+        placeholders = ", ".join(f":ch{i}" for i in range(len(channels)))
+        query += f" WHERE channel IN ({placeholders})"
+        params = {f"ch{i}": ch for i, ch in enumerate(channels)}
+    query += " ORDER BY ran_at ASC, id ASC LIMIT 2000"
+
     with sqlite3.connect(DB_PATH) as con:
         con.row_factory = sqlite3.Row
-        rows = [dict(r) for r in con.execute(
-            "SELECT * FROM run_logs ORDER BY ran_at ASC, id ASC LIMIT 2000"
-        ).fetchall()]
+        rows = [dict(r) for r in con.execute(query, params).fetchall()]
 
     groups: dict[str, list[dict]] = {}
     legacy_key = None
@@ -190,16 +197,16 @@ def get_run_batches(limit: int = 50) -> list[dict]:
         for r in rows_in_group:
             if r["brand"] not in brands:
                 brands.append(r["brand"])
-        channels = []
+        run_channels = []
         for r in rows_in_group:
-            if r["channel"] not in channels:
-                channels.append(r["channel"])
+            if r["channel"] not in run_channels:
+                run_channels.append(r["channel"])
         messages = [r["message"] for r in rows_in_group if r["message"]]
         batches.append({
             "ran_at": min(r["ran_at"] for r in rows_in_group),
             "trigger": rows_in_group[0]["trigger"],
             "brands": ", ".join(brands),
-            "channels": ", ".join(channels),
+            "channels": ", ".join(run_channels),
             "combinations": len(rows_in_group),
             "fetched": sum(r["fetched"] for r in rows_in_group),
             "inserted": sum(r["inserted"] for r in rows_in_group),
