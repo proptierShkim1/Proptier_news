@@ -178,7 +178,7 @@ def test_get_policy_run_batches_marks_ok_false_when_any_source_failed(tmp_path, 
 def test_get_run_batches_without_channels_filter_returns_everything(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     db.insert_run_log(_run_log_entry(channel="네이버", run_id="batch1", ran_at="2026-08-04 09:00:00"))
-    db.insert_run_log(_run_log_entry(channel="네이버뉴스", run_id="batch2", ran_at="2026-08-04 10:00:00"))
+    db.insert_run_log(_run_log_entry(channel="네이버뉴스API", run_id="batch2", ran_at="2026-08-04 10:00:00"))
 
     batches = db.get_run_batches()
 
@@ -188,15 +188,15 @@ def test_get_run_batches_without_channels_filter_returns_everything(tmp_path, mo
 def test_get_run_batches_channels_filter_only_includes_matching_channels(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     db.insert_run_log(_run_log_entry(channel="네이버", run_id="batch1", ran_at="2026-08-04 09:00:00"))
-    db.insert_run_log(_run_log_entry(channel="네이버뉴스", run_id="batch2", ran_at="2026-08-04 10:00:00"))
+    db.insert_run_log(_run_log_entry(channel="네이버뉴스API", run_id="batch2", ran_at="2026-08-04 10:00:00"))
 
     brand_batches = db.get_run_batches(channels=["네이버", "구글", "다음", "커뮤니티"])
-    naver_news_batches = db.get_run_batches(channels=["네이버뉴스"])
+    naver_news_batches = db.get_run_batches(channels=["네이버뉴스API"])
 
     assert len(brand_batches) == 1
     assert brand_batches[0]["channels"] == "네이버"
     assert len(naver_news_batches) == 1
-    assert naver_news_batches[0]["channels"] == "네이버뉴스"
+    assert naver_news_batches[0]["channels"] == "네이버뉴스API"
 
 
 def test_get_run_batches_channels_filter_splits_mixed_channel_batch(tmp_path, monkeypatch):
@@ -208,15 +208,15 @@ def test_get_run_batches_channels_filter_splits_mixed_channel_batch(tmp_path, mo
     naver_entry["inserted"] = 4
     db.insert_run_log(naver_entry)
 
-    naver_news_entry = _run_log_entry(channel="네이버뉴스", run_id="batch1", ran_at="2026-08-04 09:00:02")
+    naver_news_entry = _run_log_entry(channel="네이버뉴스API", run_id="batch1", ran_at="2026-08-04 09:00:02")
     naver_news_entry["fetched"] = 3
     naver_news_entry["inserted"] = 2
     db.insert_run_log(naver_news_entry)
 
     # Filter by 네이버 only
     naver_batches = db.get_run_batches(channels=["네이버"])
-    # Filter by 네이버뉴스 only
-    naver_news_batches = db.get_run_batches(channels=["네이버뉴스"])
+    # Filter by 네이버뉴스API only
+    naver_news_batches = db.get_run_batches(channels=["네이버뉴스API"])
 
     # Each filter should return exactly one batch with only that channel's data
     assert len(naver_batches) == 1
@@ -226,7 +226,7 @@ def test_get_run_batches_channels_filter_splits_mixed_channel_batch(tmp_path, mo
     assert naver_batches[0]["inserted"] == 4
 
     assert len(naver_news_batches) == 1
-    assert naver_news_batches[0]["channels"] == "네이버뉴스"
+    assert naver_news_batches[0]["channels"] == "네이버뉴스API"
     assert naver_news_batches[0]["combinations"] == 1
     assert naver_news_batches[0]["fetched"] == 3
     assert naver_news_batches[0]["inserted"] == 2

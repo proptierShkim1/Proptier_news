@@ -217,7 +217,7 @@ def _collect_one(
     return entry
 
 
-_NAVER_NEWS_CHANNEL = "네이버뉴스"
+_NAVER_NEWS_CHANNEL = "네이버뉴스API"
 
 _naver_news_state_lock = threading.Lock()
 _active_naver_news_run_id: str | None = None
@@ -273,6 +273,34 @@ def run_naver_news_collection(
         if on_progress is not None:
             on_progress(entry)
         if i < len(brands) - 1:
+            time.sleep(_REQUEST_DELAY_SECONDS)
+    return log_entries
+
+
+def run_backfill(days: int = 30, max_pages: int = 10, trigger: str = "백필") -> list[dict]:
+    """일회성 과거 데이터 백필. 페이지네이션/기간 파라미터를 지원하는 세 채널
+    (구글/다음/네이버뉴스API)만 대상으로, 각자 최대한 과거 `days`일치를 끌어온다.
+    네이버(블로그·카페)/커뮤니티는 페이지네이션이 없어 백필 효과가 없으므로
+    대상에서 제외한다(평소 "지금 수집"과 동일한 결과만 나옴). UI/스케줄에는
+    연결하지 않고 필요할 때 직접 호출해서 쓰는 운영용 함수다."""
+    cfg = load_keywords()
+    context_words = cfg.get("context") or []
+    exclude_terms = cfg.get("exclude") or []
+    run_id = str(uuid.uuid4())[:8]
+    backfill_crawlers = {
+        "구글": lambda term: google_crawler.search(term, recency_days=days),
+        "다음": lambda term: daum_crawler.search(term, recency_days=days, max_pages=max_pages),
+        "네이버뉴스API": lambda term: naver_news_api_crawler.search(
+            term, max_pages=max_pages, recency_days=days
+        ),
+    }
+    log_entries = []
+    for brand_entry in cfg["brands"]:
+        for channel, crawl in backfill_crawlers.items():
+            entry = _collect_one(
+                brand_entry, channel, crawl, trigger, run_id, context_words, exclude_terms,
+            )
+            log_entries.append(entry)
             time.sleep(_REQUEST_DELAY_SECONDS)
     return log_entries
 

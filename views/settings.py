@@ -553,7 +553,7 @@ def _render_naver_news_collection_tab():
 
     st.divider()
     st.subheader("📜 수집 이력")
-    naver_news_batches = db.get_run_batches(limit=50, channels=["네이버뉴스"])
+    naver_news_batches = db.get_run_batches(limit=50, channels=["네이버뉴스API"])
     if naver_news_batches:
         naver_news_batch_df = pd.DataFrame(naver_news_batches)[
             ["ran_at", "trigger", "brands", "combinations", "fetched", "inserted", "skipped", "ok", "message"]
@@ -722,7 +722,7 @@ def _render_brand_lookup_tab():
     st.subheader("🗃 수집 데이터 조회")
 
     brands = ["전체"] + [b["name"] for b in load_keywords()["brands"]]
-    channels = ["전체", "네이버", "구글", "다음", "커뮤니티", "네이버뉴스"]
+    channels = ["전체", "네이버", "구글", "다음", "커뮤니티", "네이버뉴스API"]
 
     col_brand, col_channel, col_size = st.columns(3)
     with col_brand:

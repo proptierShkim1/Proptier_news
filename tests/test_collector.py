@@ -345,8 +345,8 @@ def test_run_naver_news_collection_saves_records_tagged_with_naver_news_channel(
     entries = collector.run_naver_news_collection()
 
     assert len(entries) == 1
-    assert entries[0]["channel"] == "네이버뉴스"
-    mentions = db.get_mentions(channel="네이버뉴스")
+    assert entries[0]["channel"] == "네이버뉴스API"
+    mentions = db.get_mentions(channel="네이버뉴스API")
     assert len(mentions) == 1
     assert mentions[0]["content"] == ""
 
@@ -395,7 +395,7 @@ def test_start_background_naver_news_collection_runs_and_completes(tmp_path, mon
 
     assert run_id is not None
     assert _wait_until(lambda: collector.active_naver_news_run_id() is None)
-    mentions = db.get_mentions(channel="네이버뉴스")
+    mentions = db.get_mentions(channel="네이버뉴스API")
     assert len(mentions) == 1
 
 
