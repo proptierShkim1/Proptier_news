@@ -11,6 +11,7 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 KEYWORDS_FILE = DATA_DIR / "keywords.json"
 COLLECTION_SCHEDULE_FILE = DATA_DIR / "collection_schedule.json"
 POLICY_COLLECTION_SCHEDULE_FILE = DATA_DIR / "policy_collection_schedule.json"
+NAVER_NEWS_COLLECTION_SCHEDULE_FILE = DATA_DIR / "naver_news_collection_schedule.json"
 
 
 def load_json(path: Path, default):
@@ -73,6 +74,16 @@ def load_policy_collection_schedule() -> dict:
 
 def save_policy_collection_schedule(cfg: dict) -> None:
     save_json(POLICY_COLLECTION_SCHEDULE_FILE, cfg)
+
+
+def load_naver_news_collection_schedule() -> dict:
+    cfg = load_json(NAVER_NEWS_COLLECTION_SCHEDULE_FILE, {"times": []})
+    cfg["times"] = _normalize_schedule_times(cfg.get("times", []))
+    return cfg
+
+
+def save_naver_news_collection_schedule(cfg: dict) -> None:
+    save_json(NAVER_NEWS_COLLECTION_SCHEDULE_FILE, cfg)
 
 
 _RELATIVE_KOREAN_DATE_RE = re.compile(r"^(\d+)(분|시간|일)\s*전$")
