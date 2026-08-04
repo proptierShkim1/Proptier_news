@@ -48,6 +48,30 @@ def test_search_parses_and_strips_bold_tags_and_prefers_originallink(monkeypatch
     }]
 
 
+def test_search_decodes_html_entities_in_title_and_description(monkeypatch):
+    _set_credentials(monkeypatch)
+    payload = {
+        "items": [
+            {
+                "title": "<b>프롭티어</b> &quot;전세사기 예방&quot; 서비스 출시",
+                "originallink": "https://example.com/news/2",
+                "link": "https://news.naver.com/2",
+                "description": "프롭티어 &amp; 파트너사가 공동 출시",
+                "pubDate": "Mon, 03 Aug 2026 09:00:00 +0900",
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        naver_news_api.requests, "get",
+        lambda url, params, headers, timeout: _FakeResponse(payload),
+    )
+
+    results = naver_news_api.search("프롭티어")
+
+    assert results[0]["title"] == '프롭티어 "전세사기 예방" 서비스 출시'
+    assert results[0]["snippet"] == "프롭티어 & 파트너사가 공동 출시"
+
+
 def test_search_falls_back_to_link_when_originallink_missing(monkeypatch):
     _set_credentials(monkeypatch)
     payload = {"items": [{

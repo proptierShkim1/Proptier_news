@@ -491,6 +491,11 @@ def _render_naver_news_collection_tab():
         "네이버 공식 뉴스 검색 API로 수집합니다. 키워드 관리의 키워드를 그대로 "
         "사용하며, 신규 게시물과 별도의 독립된 스케줄을 가집니다."
     )
+    st.caption(
+        "⚠️ URL은 채널과 무관하게 전체에서 중복 제거되므로, 구글/다음 채널에서 이미 "
+        "수집된 기사와 동일한 URL은 네이버뉴스 탭에서 다시 수집되지 않습니다(반대 "
+        "방향도 동일). 신규 건수가 0이어도 오류가 아닐 수 있습니다."
+    )
     if not os.getenv("NAVER_CLIENT_ID") or not os.getenv("NAVER_CLIENT_SECRET"):
         st.warning(
             "⚠️ .env에 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET이 설정되어 있지 않습니다. "

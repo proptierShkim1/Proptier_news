@@ -1044,3 +1044,7 @@ git commit -m "feat: add Naver News API collection tab to settings UI"
 - 배포 시(기존 "서버 배포" 탭) `.env`도 함께 전송되는 파일 목록에 포함되어 있는지
   확인 필요 — `views/settings.py`의 `_UPLOAD_ROOT_EXTRAS = {".env"}`로 이미 포함되어
   있으므로 별도 작업 불필요.
+- `mentions.url`은 채널과 무관하게 전역 UNIQUE 제약이 걸려 있어, 구글/다음 채널에서
+  이미 수집된 URL이 네이버뉴스 채널로 나중에 들어오면(또는 반대 순서로) 중복으로
+  간주되어 조용히 스킵된다. "네이버뉴스 탭에 신규 건수가 0건" 같은 보고는 버그가
+  아니라 이 스키마 특성 때문일 수 있다.

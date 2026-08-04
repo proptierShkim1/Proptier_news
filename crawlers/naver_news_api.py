@@ -3,6 +3,7 @@ hana_p — 네이버 공식 뉴스 검색 API 클라이언트. Client ID/Secret 
 NAVER_CLIENT_ID, NAVER_CLIENT_SECRET).
 """
 
+import html
 import os
 import re
 from email.utils import parsedate_to_datetime
@@ -17,7 +18,7 @@ _BOLD_TAG_RE = re.compile(r"</?b>")
 
 
 def _clean(text: str) -> str:
-    return _BOLD_TAG_RE.sub("", text).strip()
+    return html.unescape(_BOLD_TAG_RE.sub("", text)).strip()
 
 
 def _auth_headers() -> dict:

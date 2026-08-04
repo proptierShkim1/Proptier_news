@@ -91,7 +91,8 @@ def _tick_naver_news() -> None:
             if schedule_matches_now(schedules, now):
                 with _lock:
                     _last_fired_naver_news = minute_key
-                collector.run_naver_news_collection(trigger="자동")
+                started_run_id = collector.start_background_naver_news_collection(trigger="자동")
+                logger.info("네이버뉴스 API 자동 수집 시작 (run_id=%s)", started_run_id)
     except Exception:
         logger.exception("스케줄러(네이버뉴스 API) 반복 실행 중 오류 발생")
 

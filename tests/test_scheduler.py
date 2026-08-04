@@ -122,7 +122,7 @@ def test_tick_naver_news_fires_on_its_own_independent_schedule(monkeypatch):
         lambda days, trigger: calls.append(("policy", trigger)) or {},
     )
     monkeypatch.setattr(
-        scheduler.collector, "run_naver_news_collection",
+        scheduler.collector, "start_background_naver_news_collection",
         lambda trigger: calls.append(("naver_news", trigger)),
     )
 
@@ -140,7 +140,10 @@ def test_tick_naver_news_does_not_fire_twice_for_same_minute(monkeypatch):
     monkeypatch.setattr(scheduler, "load_naver_news_collection_schedule", lambda: {"times": ["09:00"]})
 
     calls = []
-    monkeypatch.setattr(scheduler.collector, "run_naver_news_collection", lambda trigger: calls.append(trigger))
+    monkeypatch.setattr(
+        scheduler.collector, "start_background_naver_news_collection",
+        lambda trigger: calls.append(trigger),
+    )
 
     scheduler._tick()
     scheduler._tick()
@@ -158,7 +161,7 @@ def test_tick_swallows_exception_from_naver_news_collection(monkeypatch, caplog)
     def boom(trigger):
         raise RuntimeError("naver news collection failed")
 
-    monkeypatch.setattr(scheduler.collector, "run_naver_news_collection", boom)
+    monkeypatch.setattr(scheduler.collector, "start_background_naver_news_collection", boom)
 
     with caplog.at_level("ERROR", logger="hana_p.scheduler"):
         scheduler._tick()
