@@ -313,6 +313,13 @@ def _show_collection_progress(run_id):
 def _render_brand_collection_tab():
     st.subheader("🏷️ 키워드 관리")
     st.caption("네이버·구글·다음·커뮤니티(디시인사이드) 4개 채널에서 수집합니다. API 키 불필요.")
+    with st.expander("채널별 수집 방식"):
+        st.markdown(
+            "- **네이버**: 통합검색 결과 페이지 스크래핑 (블로그·카페)\n"
+            "- **구글**: 뉴스 RSS 피드 파싱\n"
+            "- **다음**: 뉴스 검색 결과 페이지 스크래핑 (최대 10페이지)\n"
+            "- **커뮤니티**: 디시인사이드 통합검색 결과 스크래핑 (갤러리)"
+        )
     kw_cfg = load_keywords()
 
     st.metric("등록 키워드", f"{len(kw_cfg['brands'])}개")
