@@ -27,9 +27,9 @@ _RELATIVE_RE = re.compile(r"^(\d+)(분|시간|일)\s*전$")
 _RELATIVE_UNIT_TO_KWARG = {"분": "minutes", "시간": "hours", "일": "days"}
 
 
-def _is_recent(posted_at: str, now: datetime) -> bool:
+def _is_recent(posted_at: str, now: datetime, recency_days: int = _RECENCY_WINDOW_DAYS) -> bool:
     """posted_at(YYYY.MM.DD 또는 "N분/시간/일 전")가 now 기준 최근
-    _RECENCY_WINDOW_DAYS일 이내인지 여부. 형식이 다르거나 비어 있으면 항상 통과시킨다."""
+    recency_days일 이내인지 여부. 형식이 다르거나 비어 있으면 항상 통과시킨다."""
     if not posted_at:
         return True
 
@@ -37,13 +37,13 @@ def _is_recent(posted_at: str, now: datetime) -> bool:
     if relative:
         amount, unit = relative.groups()
         age = timedelta(**{_RELATIVE_UNIT_TO_KWARG[unit]: int(amount)})
-        return age <= timedelta(days=_RECENCY_WINDOW_DAYS)
+        return age <= timedelta(days=recency_days)
 
     try:
         dt = datetime.strptime(posted_at, "%Y.%m.%d")
     except ValueError:
         return True
-    return now.date() - dt.date() <= timedelta(days=_RECENCY_WINDOW_DAYS)
+    return now.date() - dt.date() <= timedelta(days=recency_days)
 
 
 def _parse(html: str) -> list[dict]:
@@ -71,11 +71,11 @@ def _parse(html: str) -> list[dict]:
     return results
 
 
-def search(term: str) -> list[dict]:
+def search(term: str, recency_days: int = _RECENCY_WINDOW_DAYS, max_pages: int = _MAX_PAGES) -> list[dict]:
     now = datetime.now()
     results = []
     seen_urls = set()
-    for page in range(1, _MAX_PAGES + 1):
+    for page in range(1, max_pages + 1):
         resp = requests.get(
             "https://search.daum.net/search",
             params={"w": "news", "q": term, "p": page},
@@ -96,12 +96,12 @@ def search(term: str) -> list[dict]:
             resolved = resolve_relative_korean_date(record["posted_at"], now)
             if resolved is not None:
                 record["posted_at"] = resolved
-            if _is_recent(record["posted_at"], now):
+            if _is_recent(record["posted_at"], now, recency_days):
                 results.append(record)
         if new_count == 0:
             break
 
-        if page < _MAX_PAGES:
+        if page < max_pages:
             time.sleep(_PAGE_DELAY_SECONDS)
     return results
 

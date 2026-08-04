@@ -18,8 +18,8 @@ _TIMEOUT = 10
 _RECENCY_WINDOW_DAYS = 7
 
 
-def _is_recent(pub_date: str, now: datetime) -> bool:
-    """pub_date가 now 기준 최근 _RECENCY_WINDOW_DAYS일 이내인지 여부.
+def _is_recent(pub_date: str, now: datetime, recency_days: int = _RECENCY_WINDOW_DAYS) -> bool:
+    """pub_date가 now 기준 최근 recency_days일 이내인지 여부.
     날짜를 파싱할 수 없으면(형식 변경 등) 걸러내지 않고 항상 통과시킨다."""
     try:
         dt = parsedate_to_datetime(pub_date)
@@ -27,10 +27,10 @@ def _is_recent(pub_date: str, now: datetime) -> bool:
         return True
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    return now - dt <= timedelta(days=_RECENCY_WINDOW_DAYS)
+    return now - dt <= timedelta(days=recency_days)
 
 
-def _parse(xml_text: str, now: datetime | None = None) -> list[dict]:
+def _parse(xml_text: str, now: datetime | None = None, recency_days: int = _RECENCY_WINDOW_DAYS) -> list[dict]:
     now = now or datetime.now(timezone.utc)
     root = ET.fromstring(xml_text)
     results = []
@@ -40,7 +40,7 @@ def _parse(xml_text: str, now: datetime | None = None) -> list[dict]:
         if not title or not url:
             continue
         pub_date = (item.findtext("pubDate") or "").strip()
-        if not _is_recent(pub_date, now):
+        if not _is_recent(pub_date, now, recency_days):
             continue
         results.append({
             "source_detail": "뉴스",
@@ -52,7 +52,7 @@ def _parse(xml_text: str, now: datetime | None = None) -> list[dict]:
     return results
 
 
-def search(term: str) -> list[dict]:
+def search(term: str, recency_days: int = _RECENCY_WINDOW_DAYS) -> list[dict]:
     resp = requests.get(
         "https://news.google.com/rss/search",
         params={"q": term, "hl": "ko", "gl": "KR", "ceid": "KR:ko"},
@@ -60,4 +60,4 @@ def search(term: str) -> list[dict]:
         timeout=_TIMEOUT,
     )
     resp.raise_for_status()
-    return _parse(resp.text)
+    return _parse(resp.text, recency_days=recency_days)

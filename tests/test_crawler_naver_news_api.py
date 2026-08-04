@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 import pytest
 
 from crawlers import naver_news_api
@@ -126,3 +128,76 @@ def test_search_propagates_request_exception(monkeypatch):
 
     with pytest.raises(naver_news_api.requests.exceptions.RequestException):
         naver_news_api.search("프롭티어")
+
+
+def _item(n, pub_date):
+    return {
+        "title": f"제목{n}",
+        "originallink": f"https://example.com/news/{n}",
+        "description": f"요약{n}",
+        "pubDate": pub_date,
+    }
+
+
+def _rfc822(dt):
+    return dt.strftime("%a, %d %b %Y %H:%M:%S +0900")
+
+
+def test_search_paginates_using_start_param_when_max_pages_greater_than_one(monkeypatch):
+    _set_credentials(monkeypatch)
+    now = datetime.now()
+    page1_items = [_item(i, _rfc822(now)) for i in range(naver_news_api._DISPLAY)]
+    page2_items = [_item(200, _rfc822(now))]
+    calls = []
+
+    def fake_get(url, params, headers, timeout):
+        calls.append(params["start"])
+        if params["start"] == 1:
+            return _FakeResponse({"items": page1_items})
+        return _FakeResponse({"items": page2_items})
+
+    monkeypatch.setattr(naver_news_api.requests, "get", fake_get)
+
+    results = naver_news_api.search("프롭티어", max_pages=2)
+
+    assert calls == [1, 101]
+    assert len(results) == naver_news_api._DISPLAY + 1
+
+
+def test_search_stops_paging_once_recency_days_cutoff_reached(monkeypatch):
+    _set_credentials(monkeypatch)
+    now = datetime.now()
+    old_date = now - timedelta(days=40)
+    page1_items = [_item(1, _rfc822(now)), _item(2, _rfc822(old_date)), _item(3, _rfc822(now))]
+    calls = []
+
+    def fake_get(url, params, headers, timeout):
+        calls.append(params["start"])
+        return _FakeResponse({"items": page1_items})
+
+    monkeypatch.setattr(naver_news_api.requests, "get", fake_get)
+
+    results = naver_news_api.search("프롭티어", max_pages=5, recency_days=30)
+
+    assert calls == [1]
+    assert len(results) == 1
+    assert results[0]["title"] == "제목1"
+
+
+def test_search_default_call_still_sends_only_start_1_no_recency_filter(monkeypatch):
+    """max_pages/recency_days를 안 주면 기존과 동일하게 단일 호출, 필터 없음."""
+    _set_credentials(monkeypatch)
+    old_date = datetime.now() - timedelta(days=400)
+    payload = {"items": [_item(1, _rfc822(old_date))]}
+    calls = []
+
+    def fake_get(url, params, headers, timeout):
+        calls.append(params["start"])
+        return _FakeResponse(payload)
+
+    monkeypatch.setattr(naver_news_api.requests, "get", fake_get)
+
+    results = naver_news_api.search("프롭티어")
+
+    assert calls == [1]
+    assert len(results) == 1
