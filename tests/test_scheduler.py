@@ -25,6 +25,7 @@ def _fix_now(monkeypatch, fixed_now):
 def _reset(monkeypatch):
     monkeypatch.setattr(scheduler, "_last_fired", "")
     monkeypatch.setattr(scheduler, "_last_fired_policy", "")
+    monkeypatch.setattr(scheduler, "_last_fired_naver_news", "")
 
 
 def test_tick_new_posts_and_policy_fire_on_their_own_independent_schedules(monkeypatch):
@@ -33,6 +34,7 @@ def test_tick_new_posts_and_policy_fire_on_their_own_independent_schedules(monke
     _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
     monkeypatch.setattr(scheduler, "load_collection_schedule", lambda: {"times": []})
     monkeypatch.setattr(scheduler, "load_policy_collection_schedule", lambda: {"times": ["09:00"]})
+    monkeypatch.setattr(scheduler, "load_naver_news_collection_schedule", lambda: {"times": []})
 
     brand_calls = []
     policy_calls = []
@@ -55,6 +57,7 @@ def test_tick_policy_does_not_fire_twice_for_same_minute(monkeypatch):
     _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
     monkeypatch.setattr(scheduler, "load_collection_schedule", lambda: {"times": []})
     monkeypatch.setattr(scheduler, "load_policy_collection_schedule", lambda: {"times": ["09:00"]})
+    monkeypatch.setattr(scheduler, "load_naver_news_collection_schedule", lambda: {"times": []})
 
     calls = []
     monkeypatch.setattr(
@@ -73,6 +76,7 @@ def test_tick_swallows_exception_from_policy_collection(monkeypatch, caplog):
     _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
     monkeypatch.setattr(scheduler, "load_collection_schedule", lambda: {"times": []})
     monkeypatch.setattr(scheduler, "load_policy_collection_schedule", lambda: {"times": ["09:00"]})
+    monkeypatch.setattr(scheduler, "load_naver_news_collection_schedule", lambda: {"times": []})
 
     def boom(days, trigger):
         raise RuntimeError("policy collection failed")
@@ -96,8 +100,68 @@ def test_tick_swallows_exception_from_load_policy_collection_schedule(monkeypatc
         raise RuntimeError("policy schedule file corrupted")
 
     monkeypatch.setattr(scheduler, "load_policy_collection_schedule", boom)
+    monkeypatch.setattr(scheduler, "load_naver_news_collection_schedule", lambda: {"times": []})
 
     with caplog.at_level("ERROR", logger="hana_p.scheduler"):
         scheduler._tick()
 
+    assert any("오류" in record.message for record in caplog.records)
+
+
+def test_tick_naver_news_fires_on_its_own_independent_schedule(monkeypatch):
+    _reset(monkeypatch)
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+    monkeypatch.setattr(scheduler, "load_collection_schedule", lambda: {"times": []})
+    monkeypatch.setattr(scheduler, "load_policy_collection_schedule", lambda: {"times": []})
+    monkeypatch.setattr(scheduler, "load_naver_news_collection_schedule", lambda: {"times": ["09:00"]})
+
+    calls = []
+    monkeypatch.setattr(scheduler.collector, "run_collection", lambda trigger: calls.append(("brand", trigger)))
+    monkeypatch.setattr(
+        scheduler.collector, "collect_all_policy_events",
+        lambda days, trigger: calls.append(("policy", trigger)) or {},
+    )
+    monkeypatch.setattr(
+        scheduler.collector, "run_naver_news_collection",
+        lambda trigger: calls.append(("naver_news", trigger)),
+    )
+
+    scheduler._tick()
+
+    assert calls == [("naver_news", "자동")]
+    assert scheduler._last_fired_naver_news == "2026-07-16 09:00"
+
+
+def test_tick_naver_news_does_not_fire_twice_for_same_minute(monkeypatch):
+    _reset(monkeypatch)
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+    monkeypatch.setattr(scheduler, "load_collection_schedule", lambda: {"times": []})
+    monkeypatch.setattr(scheduler, "load_policy_collection_schedule", lambda: {"times": []})
+    monkeypatch.setattr(scheduler, "load_naver_news_collection_schedule", lambda: {"times": ["09:00"]})
+
+    calls = []
+    monkeypatch.setattr(scheduler.collector, "run_naver_news_collection", lambda trigger: calls.append(trigger))
+
+    scheduler._tick()
+    scheduler._tick()
+
+    assert len(calls) == 1
+
+
+def test_tick_swallows_exception_from_naver_news_collection(monkeypatch, caplog):
+    _reset(monkeypatch)
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+    monkeypatch.setattr(scheduler, "load_collection_schedule", lambda: {"times": []})
+    monkeypatch.setattr(scheduler, "load_policy_collection_schedule", lambda: {"times": []})
+    monkeypatch.setattr(scheduler, "load_naver_news_collection_schedule", lambda: {"times": ["09:00"]})
+
+    def boom(trigger):
+        raise RuntimeError("naver news collection failed")
+
+    monkeypatch.setattr(scheduler.collector, "run_naver_news_collection", boom)
+
+    with caplog.at_level("ERROR", logger="hana_p.scheduler"):
+        scheduler._tick()
+
+    assert scheduler._last_fired_naver_news == "2026-07-16 09:00"
     assert any("오류" in record.message for record in caplog.records)

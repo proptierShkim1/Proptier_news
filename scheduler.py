@@ -9,7 +9,11 @@ from datetime import datetime
 from pathlib import Path
 
 import collector
-from utils import load_collection_schedule, load_policy_collection_schedule
+from utils import (
+    load_collection_schedule,
+    load_naver_news_collection_schedule,
+    load_policy_collection_schedule,
+)
 
 _POLL_SECONDS = 30
 # 폴링 주기가 아니라 "혹시 한 번 놓쳐도 다음 실행에서 메꿔지도록" 여유를 둔 값 —
@@ -17,6 +21,7 @@ _POLL_SECONDS = 30
 _POLICY_COLLECTION_DAYS = 3
 _last_fired = ""
 _last_fired_policy = ""
+_last_fired_naver_news = ""
 _lock = threading.Lock()
 _started = False
 
@@ -73,10 +78,30 @@ def _tick_policy() -> None:
         logger.exception("스케줄러(정부 정책) 반복 실행 중 오류 발생")
 
 
+def _tick_naver_news() -> None:
+    """네이버뉴스 API 자동 수집 체크. 신규 게시물/정부 정책과 독립된 스케줄/예외 처리."""
+    global _last_fired_naver_news
+    try:
+        now = datetime.now()
+        minute_key = now.strftime("%Y-%m-%d %H:%M")
+        with _lock:
+            already_fired = minute_key == _last_fired_naver_news
+        if not already_fired:
+            schedules = load_naver_news_collection_schedule()["times"]
+            if schedule_matches_now(schedules, now):
+                with _lock:
+                    _last_fired_naver_news = minute_key
+                collector.run_naver_news_collection(trigger="자동")
+    except Exception:
+        logger.exception("스케줄러(네이버뉴스 API) 반복 실행 중 오류 발생")
+
+
 def _tick() -> None:
-    """스케줄러 한 사이클 분량의 로직. 신규 게시물/정부 정책은 각자 독립된 스케줄로 체크한다."""
+    """스케줄러 한 사이클 분량의 로직. 신규 게시물/정부 정책/네이버뉴스 API는 각자
+    독립된 스케줄로 체크한다."""
     _tick_new_posts()
     _tick_policy()
+    _tick_naver_news()
 
 
 def _loop() -> None:
