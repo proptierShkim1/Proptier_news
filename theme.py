@@ -1,3 +1,5 @@
+import altair as alt
+import pandas as pd
 import streamlit as st
 
 CSS = """
@@ -187,6 +189,22 @@ def metric_row(metrics):
         <div class="metric-box"><span class="mi">{m['icon']}</span>
         <div class="v">{m['value']}</div><div class="l">{m['label']}</div></div>
         """, unsafe_allow_html=True)
+
+
+def bar_chart(data: dict, height: int = 160, color: str = "#FF8900"):
+    """st.bar_chart는 항목이 많으면 x축 레이블을 자동으로 비스듬히/세로로 돌리는데,
+    그걸 항상 가로로 고정하기 위해 Altair로 직접 그린다."""
+    df = pd.DataFrame({"label": list(data.keys()), "value": list(data.values())})
+    chart = (
+        alt.Chart(df)
+        .mark_bar(color=color)
+        .encode(
+            x=alt.X("label:N", sort=None, axis=alt.Axis(labelAngle=0, title=None)),
+            y=alt.Y("value:Q", axis=alt.Axis(title=None)),
+        )
+        .properties(height=height)
+    )
+    st.altair_chart(chart, use_container_width=True)
 
 
 def news_card(item, rank_display, top_class=""):

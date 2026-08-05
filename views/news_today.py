@@ -74,7 +74,7 @@ def render():
     """, unsafe_allow_html=True)
 
     st.caption(f"\U0001F552 최근 {news_feed.RECENCY_HOURS}시간 시간대별 수집 분포")
-    st.bar_chart({"기사 수": {h: c for h, c in hourly}}, height=160)
+    theme.bar_chart({h: c for h, c in hourly}, height=160)
 
     display_items = news_items[:news_feed.DISPLAY_LIMIT]
     title_col, help_col = st.columns([10, 1], vertical_alignment="center")

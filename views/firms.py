@@ -57,7 +57,7 @@ def render():
         key = _issue_date(iss).strftime("%Y-%m")
         monthly[key] = monthly.get(key, 0) + 1
     if monthly:
-        st.bar_chart({"이슈 건수": dict(sorted(monthly.items()))}, height=160)
+        theme.bar_chart(dict(sorted(monthly.items())), height=160)
     else:
         st.caption("해당 조건에 표시할 타임라인 데이터가 없습니다.")
 

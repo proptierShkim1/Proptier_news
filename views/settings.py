@@ -42,6 +42,8 @@ _UPLOAD_SUFFIXES = {".py", ".toml", ".txt", ".md", ".sh"}
 _UPLOAD_DIRS     = {"views", "crawlers", ".streamlit", "data", "scripts"}
 _UPLOAD_ROOT_EXTRAS = {".env"}
 _SFTP_SKIP       = {"__pycache__", ".git", "venv"}
+# 원격 서버가 자체적으로 쌓아온 수집 데이터를 로컬 배포가 덮어쓰지 않도록 제외
+_DATA_UPLOAD_SKIP = {"news.db"}
 
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
@@ -106,14 +108,14 @@ def _sftp_mkdir_p(sftp, remote: str):
                 pass
 
 
-def _sftp_upload_dir(sftp, local_dir: Path, remote_dir: str, log):
+def _sftp_upload_dir(sftp, local_dir: Path, remote_dir: str, log, skip_names: set = frozenset()):
     _sftp_mkdir_p(sftp, remote_dir)
     for item in sorted(local_dir.iterdir()):
-        if item.name in _SFTP_SKIP or item.suffix == ".pyc":
+        if item.name in _SFTP_SKIP or item.suffix == ".pyc" or item.name in skip_names:
             continue
         remote_item = f"{remote_dir}/{item.name}"
         if item.is_dir():
-            _sftp_upload_dir(sftp, item, remote_item, log)
+            _sftp_upload_dir(sftp, item, remote_item, log, skip_names=skip_names)
         else:
             sftp.put(str(item), remote_item)
             log(f"↑ {item.relative_to(ROOT)}")
@@ -162,7 +164,8 @@ def _deploy():
         for dir_name in _UPLOAD_DIRS:
             local_sub = ROOT / dir_name
             if local_sub.exists():
-                _sftp_upload_dir(sftp, local_sub, f"{_DEPLOY_REMOTE}/{dir_name}", log)
+                skip = _DATA_UPLOAD_SKIP if dir_name == "data" else frozenset()
+                _sftp_upload_dir(sftp, local_sub, f"{_DEPLOY_REMOTE}/{dir_name}", log, skip_names=skip)
         log("✅ 코드 업로드 완료")
         sftp.close()
 
