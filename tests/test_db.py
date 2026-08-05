@@ -18,6 +18,34 @@ def _mention(url="https://x/1", brand="직방", channel="네이버"):
     }
 
 
+def test_get_mentions_channels_filter_matches_any_of_the_given_channels(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1", channel="네이버"))
+    db.insert_mention(_mention(url="https://x/2", channel="구글"))
+    db.insert_mention(_mention(url="https://x/3", channel="다음"))
+
+    results = db.get_mentions(channels=["네이버", "구글"])
+
+    assert {r["url"] for r in results} == {"https://x/1", "https://x/2"}
+
+
+def test_get_mentions_channels_empty_list_returns_nothing(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1", channel="네이버"))
+
+    assert db.get_mentions(channels=[]) == []
+
+
+def test_get_mentions_without_channels_falls_back_to_single_channel_filter(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1", channel="네이버"))
+    db.insert_mention(_mention(url="https://x/2", channel="구글"))
+
+    results = db.get_mentions(channel="네이버")
+
+    assert [r["url"] for r in results] == ["https://x/1"]
+
+
 def _policy_event(url="https://www.molit.go.kr/dtl.jsp?id=1", title="제목",
                    department="주택토지", announced_at="2026-07-20", view_count=100,
                    collected_at="2026-07-24 09:00:00"):

@@ -3,7 +3,7 @@ hana_p — PDF 보고서 카드덱 템플릿. 화면 미리보기(views/report.p
 이 모듈이 만드는 동일한 HTML/CSS 조각을 공유한다 (레이아웃 이중 관리 방지).
 """
 
-from data import CATEGORY_NAMES, METRICS, NEWS, TODAY
+from datetime import datetime
 
 PAGE_PX = 1080
 RANK_COLORS = ["#d4a447", "#9aa7ad", "#c9824c", "#FF8900", "#e67600"]
@@ -74,10 +74,18 @@ def _dots_html(total, current, on_color_class="on"):
     )
 
 
-def _cover_html(items, total_pages):
-    # 카테고리 칩은 선정된 상위 뉴스 전체(NEWS) 기준 카운트로 계산
+def _cover_html(items, total_pages, total_count, ai_count):
+    # 카테고리 칩은 선정된 상위 뉴스(items) 자체의 categories 필드를 기준으로 계산한다
+    # (items가 어느 데이터 소스에서 왔는지와 무관하게 항상 실제 표시 내용과 일치함).
+    category_names = []
+    seen = set()
+    for it in items:
+        for c in it.get("categories", []):
+            if c not in seen:
+                seen.add(c)
+                category_names.append(c)
     counts = sorted(
-        ((name, sum(1 for n in NEWS if name in n["categories"])) for name in CATEGORY_NAMES),
+        ((name, sum(1 for it in items if name in it.get("categories", []))) for name in category_names),
         key=lambda x: -x[1],
     )
     chips = "".join(
@@ -87,12 +95,12 @@ def _cover_html(items, total_pages):
     <div class="page repcover">
       <div class="brandline">부동산AI뉴스봇</div>
       <h1>부동산 AI 뉴스<br>TOP {len(items)}</h1>
-      <div class="date">{TODAY.strftime('%Y년 %m월 %d일')} 기준</div>
+      <div class="date">{datetime.now().strftime('%Y년 %m월 %d일')} 기준</div>
       <div class="sub">오늘 꼭 봐야 할 부동산 AI 소식 {len(items)}가지를 골랐습니다</div>
       <div class="stats">
-        <div class="stat"><b>{METRICS[0]['value']}</b><span>수집 기사</span></div>
-        <div class="stat"><b>{METRICS[2]['value']}</b><span>관련 기사</span></div>
-        <div class="stat"><b>{len(items)}</b><span>주요 뉴스</span></div>
+        <div class="stat"><b>{total_count:,}</b><span>수집 기사</span></div>
+        <div class="stat"><b>{ai_count:,}</b><span>관련 기사</span></div>
+        <div class="stat"><b>{len(items):,}</b><span>주요 뉴스</span></div>
       </div>
       <div class="chips">{chips}</div>
       <div class="swipe"><span>옆으로 넘기며 확인하세요 →</span><div class="dots">{_dots_html(total_pages, 0)}</div></div>
@@ -123,22 +131,23 @@ def _card_html(rank, item, total_pages):
     """
 
 
-def build_deck_html(items=None):
+def build_deck_html(items, total_count=0, ai_count=0):
     """미리보기(st.markdown)와 PDF 내보내기(Playwright)가 공유하는 콘텐츠 HTML을 만든다.
     <style> 태그는 포함하지 않는다 — Streamlit 쪽은 theme.inject()가 한 번만 주입하는
     전역 스타일(DECK_CSS 포함)에 얹혀 렌더링되고, PDF 내보내기 쪽은 generate_pdf_bytes()가
     별도로 <style>을 붙여 완성한다. st.markdown 안에 <style>을 직접 넣으면 태그 자체가
     본문에 텍스트로 노출되는 문제가 있어 이렇게 분리했다.
-    각 줄 앞의 들여쓰기는 제거해서 반환한다."""
-    items = items or NEWS[:5]
+    각 줄 앞의 들여쓰기는 제거해서 반환한다.
+    total_count/ai_count는 표지 통계 칩("수집 기사"/"관련 기사")에 쓰이며, 호출부(뉴스
+    데이터를 실제로 조회한 쪽)가 계산해서 넘겨준다 — 이 모듈은 데이터 소스를 모른다."""
     total_pages = len(items) + 1
-    pages = [_cover_html(items, total_pages)]
+    pages = [_cover_html(items, total_pages, total_count, ai_count)]
     pages += [_card_html(i, item, total_pages) for i, item in enumerate(items, start=1)]
     html = f'<div class="repdeck">{"".join(pages)}</div>'
     return "\n".join(line.strip() for line in html.split("\n"))
 
 
-def generate_pdf_bytes(items=None) -> bytes:
+def generate_pdf_bytes(items, total_count=0, ai_count=0) -> bytes:
     """build_deck_html()과 동일한 레이아웃을 실제 PDF 바이트로 렌더링한다 (Playwright/Chromium).
     Streamlit 전역 스타일이 없는 독립 렌더링이므로 여기서는 <style>을 직접 붙인다.
 
@@ -153,7 +162,7 @@ def generate_pdf_bytes(items=None) -> bytes:
 
     from playwright.sync_api import sync_playwright
 
-    html = f'<meta charset="utf-8"><style>{DECK_CSS}</style>{build_deck_html(items)}'
+    html = f'<meta charset="utf-8"><style>{DECK_CSS}</style>{build_deck_html(items, total_count, ai_count)}'
 
     old_policy = None
     if sys.platform == "win32":

@@ -1,7 +1,8 @@
 import streamlit as st
 
+import db
+import news_feed
 import theme
-from data import NEWS
 from report_pdf import build_deck_html, generate_pdf_bytes
 
 
@@ -11,14 +12,23 @@ def render():
         "오늘의 브리핑을 카드뉴스 형태의 인쇄용 PDF로 내보냅니다 · 아래 미리보기와 동일한 구성으로 다운로드됩니다",
     )
 
-    top5 = NEWS[:5]
+    mentions = db.get_mentions(limit=news_feed.RECENT_LIMIT, channels=news_feed.enabled_channels())
+    if not mentions:
+        st.info("아직 수집된 데이터가 없습니다. 설정 → 데이터 수집에서 수집을 먼저 실행해주세요.")
+        theme.footer("실데이터 연동 · 수집 대기 중")
+        return
+
+    news_items = news_feed.build_news_items(mentions, news_feed.own_brand_names())
+    top5 = news_items[:5]
+    total_count = db.count_mentions()
+    ai_count = sum(1 for it in news_items if "AI" in it["categories"])
 
     col_dl, col_note = st.columns([1, 3])
     with col_dl:
         if st.button("\U0001F4E5 PDF 생성", type="primary", use_container_width=True):
             with st.spinner("PDF 생성 중... (Chromium 렌더링, 수 초 소요)"):
                 try:
-                    st.session_state["report_pdf_bytes"] = generate_pdf_bytes(top5)
+                    st.session_state["report_pdf_bytes"] = generate_pdf_bytes(top5, total_count, ai_count)
                 except Exception as e:
                     st.session_state["report_pdf_bytes"] = None
                     st.error(f"PDF 생성 실패: {e}")
@@ -37,7 +47,7 @@ def render():
         unsafe_allow_html=True,
     )
     st.markdown(
-        f'<div style="zoom:0.85; transform-origin: top left;">{build_deck_html(top5)}</div>',
+        f'<div style="zoom:0.85; transform-origin: top left;">{build_deck_html(top5, total_count, ai_count)}</div>',
         unsafe_allow_html=True,
     )
 

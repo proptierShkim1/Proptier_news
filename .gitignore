@@ -2,10 +2,14 @@
 __pycache__/
 *.pyc
 streamlit.log
+streamlit_err.log
+.claude/
 data/access_config.json
 data/news.db
 data/keywords.json
 data/collection_schedule.json
 data/policy_collection_schedule.json
+data/naver_news_collection_schedule.json
+data/channel_visibility.json
 data/deploy_log.jsonl
 data/scheduler.log

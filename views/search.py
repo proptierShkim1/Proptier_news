@@ -2,8 +2,9 @@ from datetime import datetime, timedelta
 
 import streamlit as st
 
+import db
+import news_feed
 import theme
-from data import FIRMS, NEWS, TODAY
 
 _PERIOD_DAYS = {"전체": None, "최근 90일": 90, "최근 30일": 30, "최근 7일": 7}
 
@@ -11,7 +12,7 @@ _PERIOD_DAYS = {"전체": None, "최근 90일": 90, "최근 30일": 30, "최근 
 def render():
     theme.hero(
         "\U0001F50D 지난 뉴스 검색",
-        "누적 DB 30,000건 (샘플) · 키워드·기간·부동산사로 바로 필터링",
+        f"누적 수집 {db.count_mentions():,}건 · 키워드·기간·부동산사로 바로 필터링",
     )
 
     st.markdown('<div class="sc-box">', unsafe_allow_html=True)
@@ -23,39 +24,45 @@ def render():
     with c1:
         period = st.segmented_control("기간", list(_PERIOD_DAYS.keys()), default="전체")
     with c2:
-        firm = st.selectbox("\U0001F3E2 부동산사", ["전체"] + FIRMS)
+        firm = st.selectbox("\U0001F3E2 부동산사", ["전체"] + news_feed.all_brand_names())
     with c3:
         sort = st.selectbox("↕️ 정렬", ["최신순", "점수순"])
     st.markdown('</div>', unsafe_allow_html=True)
 
     period = period or "전체"
-    terms = query.lower().split() if query else []
-    results = [
-        n for n in NEWS
-        if not terms or all(t in (n["title"] + " ".join(n["desc"])).lower() for t in terms)
-    ]
+    mentions = db.get_mentions(
+        brand="" if firm == "전체" else firm,
+        channels=news_feed.enabled_channels(),
+        limit=news_feed.BROAD_LIMIT,
+    )
 
-    if firm != "전체":
-        results = [n for n in results if n.get("firm") == firm]
+    terms = query.lower().split() if query else []
+    if terms:
+        mentions = [
+            m for m in mentions
+            if all(t in f"{m.get('title', '')} {m.get('snippet', '')}".lower() for t in terms)
+        ]
 
     days = _PERIOD_DAYS[period]
     if days is not None:
-        cutoff = TODAY - timedelta(days=days)
-        results = [
-            n for n in results
-            if datetime.strptime(n["date"], "%Y-%m-%d").date() >= cutoff
-        ]
+        cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        mentions = [m for m in mentions if (m.get("collected_at") or "") >= cutoff]
 
+    news_items = news_feed.build_news_items(mentions, news_feed.own_brand_names())
     if sort == "점수순":
-        results = sorted(results, key=lambda n: -n["score"])
+        news_items = sorted(news_items, key=lambda n: -n["score"])
     else:
-        results = sorted(results, key=lambda n: n["date"], reverse=True)
+        news_items = sorted(news_items, key=lambda n: n["collected_at"], reverse=True)
 
-    st.caption(f"검색 결과 {len(results)}건 · 기간: {period} · 부동산사: {firm}")
+    caption_col, help_col = st.columns([10, 1], vertical_alignment="center")
+    caption_col.caption(f"검색 결과 {len(news_items):,}건 · 기간: {period} · 부동산사: {firm}")
+    with help_col:
+        with st.popover("❓"):
+            st.markdown(news_feed.category_legend_markdown())
 
-    if not results:
+    if not news_items:
         st.info("조건에 맞는 기사가 없습니다. 검색어나 필터를 바꿔보세요.")
-    for i, item in enumerate(results, start=1):
-        theme.news_card(item, i)
+    for i, item in enumerate(news_items[:news_feed.DISPLAY_LIMIT], start=1):
+        theme.news_card(item, item["medal"])
 
-    theme.footer("news.db 최근 180일 기사 수록 (샘플)")
+    theme.footer("실제 수집 데이터(mentions) 기반 검색")

@@ -13,10 +13,13 @@ import collector
 import db
 from access_control import load_config, save_config, name_for_ip
 from utils import (
+    ALL_MENTION_CHANNELS,
+    load_channel_visibility,
     load_collection_schedule,
     load_keywords,
     load_naver_news_collection_schedule,
     load_policy_collection_schedule,
+    save_channel_visibility,
     save_collection_schedule,
     save_keywords,
     save_naver_news_collection_schedule,
@@ -41,6 +44,20 @@ _UPLOAD_ROOT_EXTRAS = {".env"}
 _SFTP_SKIP       = {"__pycache__", ".git", "venv"}
 
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+
+def _persistent_tabs(labels: list, qp_name: str):
+    """F5로 새로고침해도 선택된 탭이 유지되도록, 현재 탭을 쿼리 파라미터(qp_name)에
+    기록하고 다음 로드 시 그 값을 기본 탭으로 되돌린다."""
+    key = f"_tabs_{qp_name}"
+    default = st.query_params.get(qp_name)
+    if default not in labels:
+        default = None
+
+    def _on_change():
+        st.query_params[qp_name] = st.session_state[key]
+
+    return st.tabs(labels, default=default, key=key, on_change=_on_change)
 
 
 def _log_deploy(action: str, status: str, detail: str = ""):
@@ -273,7 +290,7 @@ def _render_access_control():
     if not allowed_ips:
         st.info("등록된 허용 IP가 없습니다. (현재 모든 접속 허용 중)")
     else:
-        st.caption(f"등록된 허용 IP — {len(allowed_ips)}개")
+        st.caption(f"등록된 허용 IP — {len(allowed_ips):,}개")
         for i, entry in enumerate(list(allowed_ips)):
             col_n, col_i, col_admin, col_del = st.columns([2.5, 3.5, 1.5, 1])
             col_n.write(entry.get("name") or "—")
@@ -294,7 +311,7 @@ def _render_access_control():
 
 def _format_entry_status(entry):
     return (
-        f"{entry['fetched']}건 조회 (신규 {entry['inserted']}, 중복 {entry['skipped']})"
+        f"{entry['fetched']:,}건 조회 (신규 {entry['inserted']:,}, 중복 {entry['skipped']:,})"
         if entry["ok"] else f"실패 - {entry['message']}"
     )
 
@@ -306,10 +323,10 @@ def _show_collection_progress(run_id):
         lines = [f"[{e['channel']}] {e['brand']}: {_format_entry_status(e)}" for e in logs]
         st.code("\n".join(lines), language=None, height=200)
     if collector.active_run_id() == run_id:
-        st.caption(f"🔄 진행 중... ({len(logs)}건 완료)")
+        st.caption(f"🔄 진행 중... ({len(logs):,}건 완료)")
     else:
         ok_count = sum(1 for e in logs if e["ok"])
-        st.success(f"수집 완료: {len(logs)}건 실행, 성공 {ok_count}건")
+        st.success(f"수집 완료: {len(logs):,}건 실행, 성공 {ok_count:,}건")
 
 
 def _render_brand_collection_tab():
@@ -324,7 +341,7 @@ def _render_brand_collection_tab():
         )
     kw_cfg = load_keywords()
 
-    st.metric("등록 키워드", f"{len(kw_cfg['brands'])}개")
+    st.metric("등록 키워드", f"{len(kw_cfg['brands']):,}개")
 
     by_name = {b["name"]: b for b in kw_cfg["brands"]}
     own_names = [n for n, b in by_name.items() if b.get("role") == "own"]
@@ -358,7 +375,7 @@ def _render_brand_collection_tab():
         st.rerun()
 
     context_words = kw_cfg.get("context") or collector._REAL_ESTATE_CONTEXT_WORDS
-    with st.expander(f"필수 포함 키워드 ({len(context_words)}개, 전체 키워드 공통)"):
+    with st.expander(f"필수 포함 키워드 ({len(context_words):,}개, 전체 키워드 공통)"):
         st.caption("제목/스니펫에 이 중 하나라도 없으면 노이즈로 간주해 수집하지 않습니다.")
         context_text = st.text_area(
             "필수 포함 키워드 (쉼표로 구분)", value=", ".join(context_words), height=300, key="context_text",
@@ -372,7 +389,7 @@ def _render_brand_collection_tab():
             save_keywords(kw_cfg)
             st.rerun()
 
-    with st.expander(f"제외 키워드 ({len(kw_cfg.get('exclude', []))}개, 전체 키워드 공통)"):
+    with st.expander(f"제외 키워드 ({len(kw_cfg.get('exclude', [])):,}개, 전체 키워드 공통)"):
         st.caption("제목/스니펫에 이 단어가 포함된 결과는 수집하지 않습니다.")
         exclude_text = st.text_area(
             "제외 키워드 (쉼표로 구분)", value=", ".join(kw_cfg.get("exclude", [])), height=150, key="exclude_text",
@@ -477,7 +494,7 @@ def _show_policy_collection_progress(run_id):
     else:
         total_fetched = sum(e["fetched"] for e in entries)
         total_inserted = sum(e["inserted"] for e in entries)
-        st.success(f"전체 완료 — {total_fetched}건 조회, 신규 {total_inserted}건")
+        st.success(f"전체 완료 — {total_fetched:,}건 조회, 신규 {total_inserted:,}건")
 
 
 @st.fragment(run_every=2)
@@ -487,10 +504,10 @@ def _show_naver_news_collection_progress(run_id):
         lines = [f"{e['brand']}: {_format_entry_status(e)}" for e in logs]
         st.code("\n".join(lines), language=None, height=200)
     if collector.active_naver_news_run_id() == run_id:
-        st.caption(f"🔄 진행 중... ({len(logs)}건 완료)")
+        st.caption(f"🔄 진행 중... ({len(logs):,}건 완료)")
     else:
         ok_count = sum(1 for e in logs if e["ok"])
-        st.success(f"수집 완료: {len(logs)}건 실행, 성공 {ok_count}건")
+        st.success(f"수집 완료: {len(logs):,}건 실행, 성공 {ok_count:,}건")
 
 
 def _render_naver_news_collection_tab():
@@ -622,8 +639,8 @@ def _render_policy_collection_tab():
             if st.button("🔄 지금 수집", key=key):
                 result = collect_fn(days=30)
                 st.success(
-                    f"{result['fetched']}건 조회 (신규 {result['inserted']}, "
-                    f"중복 {result['skipped']})"
+                    f"{result['fetched']:,}건 조회 (신규 {result['inserted']:,}, "
+                    f"중복 {result['skipped']:,})"
                 )
             if i < len(_POLICY_SOURCE_SECTIONS) - 1:
                 st.divider()
@@ -641,8 +658,8 @@ def _render_policy_collection_tab():
 
 
 def _render_data_collection():
-    tab_existing, tab_naver_news, tab_policy = st.tabs(
-        ["📰 신규 게시물", "📡 네이버뉴스 API", "🏛️ 정부 정책"]
+    tab_existing, tab_naver_news, tab_policy = _persistent_tabs(
+        ["📰 신규 게시물", "📡 네이버뉴스 API", "🏛️ 정부 정책"], "dc_tab"
     )
     with tab_existing:
         _render_brand_collection_tab()
@@ -780,7 +797,7 @@ def _render_brand_lookup_tab():
         ]
 
     total = len(df)
-    st.markdown(f"#### 조회 결과 ({total}건)")
+    st.markdown(f"#### 조회 결과 ({total:,}건)")
 
     filter_sig = (selected_brand, selected_channel, page_size, title_search,
                   filter_by_collected, collected_start, collected_end)
@@ -830,9 +847,9 @@ def _render_brand_lookup_tab():
     del_col, count_col = st.columns([1, 5])
     if del_col.button("🗑 선택 삭제", key="lookup_delete_button", disabled=not selected_ids):
         deleted = db.delete_mentions(selected_ids)
-        st.success(f"{deleted}건 삭제했습니다.")
+        st.success(f"{deleted:,}건 삭제했습니다.")
         st.rerun()
-    count_col.caption(f"선택된 항목: {len(selected_ids)}건")
+    count_col.caption(f"선택된 항목: {len(selected_ids):,}건")
 
     delete_all_confirm = st.checkbox(
         "⚠️ 전체 삭제에 동의합니다 (필터와 무관하게 모든 수집 데이터가 삭제됩니다)",
@@ -840,7 +857,7 @@ def _render_brand_lookup_tab():
     )
     if st.button("🗑️ 전체 삭제", key="lookup_delete_all_button", disabled=not delete_all_confirm):
         deleted = db.delete_all_mentions()
-        st.success(f"전체 {deleted}건을 삭제했습니다.")
+        st.success(f"전체 {deleted:,}건을 삭제했습니다.")
         st.rerun()
 
     st.divider()
@@ -911,7 +928,7 @@ def _render_policy_lookup_tab():
         ]
 
     total = len(df)
-    st.markdown(f"#### 조회 결과 ({total}건)")
+    st.markdown(f"#### 조회 결과 ({total:,}건)")
 
     filter_sig = (selected_department, page_size, title_search,
                   filter_by_date, date_start, date_end)
@@ -950,9 +967,9 @@ def _render_policy_lookup_tab():
     del_col, count_col = st.columns([1, 5])
     if del_col.button("🗑 선택 삭제", key="policy_lookup_delete_button", disabled=not selected_ids):
         deleted = db.delete_policy_events(selected_ids)
-        st.success(f"{deleted}건 삭제했습니다.")
+        st.success(f"{deleted:,}건 삭제했습니다.")
         st.rerun()
-    count_col.caption(f"선택된 항목: {len(selected_ids)}건")
+    count_col.caption(f"선택된 항목: {len(selected_ids):,}건")
 
     delete_all_confirm = st.checkbox(
         "⚠️ 전체 삭제에 동의합니다 (필터와 무관하게 모든 정책 데이터가 삭제됩니다)",
@@ -962,15 +979,37 @@ def _render_policy_lookup_tab():
         "🗑️ 전체 삭제", key="policy_lookup_delete_all_button", disabled=not delete_all_confirm,
     ):
         deleted = db.delete_all_policy_events()
-        st.success(f"전체 {deleted}건을 삭제했습니다.")
+        st.success(f"전체 {deleted:,}건을 삭제했습니다.")
         st.rerun()
 
     st.divider()
     _render_pagination_controls("policy_lookup", page, total_pages)
 
 
+def _render_channel_visibility():
+    st.subheader("🔎 화면 표시 채널")
+    st.caption(
+        "여기서 끈 채널은 오늘의 뉴스·부동산사 동향·브리핑·뉴스 검색·PDF 보고서 5개 화면에서 "
+        "제외됩니다 (수집·저장은 그대로 계속되고, 이 설정 화면의 데이터 관리 조회에는 영향 없음)."
+    )
+    enabled = load_channel_visibility()
+    cols = st.columns(len(ALL_MENTION_CHANNELS))
+    selected = []
+    for col, ch in zip(cols, ALL_MENTION_CHANNELS):
+        if col.checkbox(ch, value=ch in enabled, key=f"chvis_{ch}"):
+            selected.append(ch)
+    if st.button("💾 저장", key="save_channel_visibility"):
+        if not selected:
+            st.error("최소 1개 채널은 선택되어 있어야 합니다.")
+        else:
+            save_channel_visibility(selected)
+            st.rerun()
+    st.divider()
+
+
 def _render_data_management():
-    tab_existing, tab_policy = st.tabs(["📰 신규 게시물", "🏛️ 정부 정책"])
+    _render_channel_visibility()
+    tab_existing, tab_policy = _persistent_tabs(["📰 신규 게시물", "🏛️ 정부 정책"], "dm_tab")
     with tab_existing:
         _render_brand_lookup_tab()
     with tab_policy:
@@ -982,8 +1021,8 @@ def _render_data_management():
 def render():
     st.title("⚙️ 설정")
 
-    tab_access, tab_collect, tab_manage, tab_deploy = st.tabs(
-        ["🔐 접근 제어", "🔄 데이터 수집", "🗃 데이터 관리", "🚀 배포"]
+    tab_access, tab_collect, tab_manage, tab_deploy = _persistent_tabs(
+        ["🔐 접근 제어", "🔄 데이터 수집", "🗃 데이터 관리", "🚀 배포"], "main_tab"
     )
     with tab_access:
         _render_access_control()

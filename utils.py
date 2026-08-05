@@ -12,6 +12,8 @@ KEYWORDS_FILE = DATA_DIR / "keywords.json"
 COLLECTION_SCHEDULE_FILE = DATA_DIR / "collection_schedule.json"
 POLICY_COLLECTION_SCHEDULE_FILE = DATA_DIR / "policy_collection_schedule.json"
 NAVER_NEWS_COLLECTION_SCHEDULE_FILE = DATA_DIR / "naver_news_collection_schedule.json"
+CHANNEL_VISIBILITY_FILE = DATA_DIR / "channel_visibility.json"
+ALL_MENTION_CHANNELS = ["네이버", "구글", "다음", "커뮤니티", "네이버뉴스API"]
 
 
 def load_json(path: Path, default):
@@ -84,6 +86,17 @@ def load_naver_news_collection_schedule() -> dict:
 
 def save_naver_news_collection_schedule(cfg: dict) -> None:
     save_json(NAVER_NEWS_COLLECTION_SCHEDULE_FILE, cfg)
+
+
+def load_channel_visibility() -> list:
+    """오늘의 뉴스/부동산사 동향/브리핑/뉴스 검색/PDF 보고서 5개 화면에 표시할
+    채널 목록. 파일이 없으면 전체 채널이 기본값이다."""
+    cfg = load_json(CHANNEL_VISIBILITY_FILE, {"enabled_channels": list(ALL_MENTION_CHANNELS)})
+    return [c for c in cfg.get("enabled_channels", []) if c in ALL_MENTION_CHANNELS]
+
+
+def save_channel_visibility(channels: list) -> None:
+    save_json(CHANNEL_VISIBILITY_FILE, {"enabled_channels": channels})
 
 
 _RELATIVE_KOREAN_DATE_RE = re.compile(r"^(\d+)(분|시간|일)\s*전$")

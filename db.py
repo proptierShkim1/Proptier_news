@@ -111,14 +111,31 @@ def insert_run_log(entry: dict) -> None:
         )
 
 
-def get_mentions(brand: str = "", channel: str = "", limit: int = 3000) -> list[dict]:
+def count_mentions() -> int:
     init_db()
+    with sqlite3.connect(DB_PATH) as con:
+        return con.execute("SELECT COUNT(*) FROM mentions").fetchone()[0]
+
+
+def get_mentions(
+    brand: str = "", channel: str = "", channels: list | None = None, limit: int = 3000
+) -> list[dict]:
+    """channels가 주어지면(빈 리스트 포함) 그 채널들만 대상으로 하고 channel은 무시한다.
+    channels=None(기본값)이면 channel 단일 필터만 적용한다(기존 동작과 동일)."""
+    init_db()
+    if channels is not None and not channels:
+        return []
     query = "SELECT * FROM mentions WHERE 1=1"
     params = {"limit": limit}
     if brand:
         query += " AND brand = :brand"
         params["brand"] = brand
-    if channel:
+    if channels:
+        placeholders = ", ".join(f":ch{i}" for i in range(len(channels)))
+        query += f" AND channel IN ({placeholders})"
+        for i, ch in enumerate(channels):
+            params[f"ch{i}"] = ch
+    elif channel:
         query += " AND channel = :channel"
         params["channel"] = channel
     query += " ORDER BY collected_at DESC LIMIT :limit"

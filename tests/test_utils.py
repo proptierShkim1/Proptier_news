@@ -2,10 +2,12 @@ import json
 from datetime import datetime
 
 from utils import (
+    load_channel_visibility,
     load_collection_schedule,
     load_naver_news_collection_schedule,
     load_policy_collection_schedule,
     resolve_relative_korean_date,
+    save_channel_visibility,
     save_collection_schedule,
     save_naver_news_collection_schedule,
     save_policy_collection_schedule,
@@ -82,3 +84,27 @@ def test_naver_news_collection_schedule_is_independent_of_other_schedules(tmp_pa
     assert load_collection_schedule() == {"times": ["09:00"]}
     assert load_policy_collection_schedule() == {"times": ["10:00"]}
     assert load_naver_news_collection_schedule() == {"times": ["11:00"]}
+
+
+def test_load_channel_visibility_defaults_to_all_channels_when_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(utils, "CHANNEL_VISIBILITY_FILE", tmp_path / "channel_visibility.json")
+
+    assert load_channel_visibility() == utils.ALL_MENTION_CHANNELS
+
+
+def test_save_channel_visibility_persists_selected_channels(tmp_path, monkeypatch):
+    visibility_file = tmp_path / "channel_visibility.json"
+    monkeypatch.setattr(utils, "CHANNEL_VISIBILITY_FILE", visibility_file)
+
+    save_channel_visibility(["네이버뉴스API"])
+
+    assert load_channel_visibility() == ["네이버뉴스API"]
+
+
+def test_load_channel_visibility_ignores_unknown_channel_names(tmp_path, monkeypatch):
+    visibility_file = tmp_path / "channel_visibility.json"
+    monkeypatch.setattr(utils, "CHANNEL_VISIBILITY_FILE", visibility_file)
+
+    save_channel_visibility(["네이버", "존재하지않는채널"])
+
+    assert load_channel_visibility() == ["네이버"]
