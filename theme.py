@@ -224,5 +224,18 @@ def news_card(item, rank_display, top_class=""):
     """, unsafe_allow_html=True)
 
 
+def policy_card(event):
+    dept = event.get("department") or "-"
+    st.markdown(f"""
+    <div class="sl-item">
+      <div class="sl-signal">\U0001F3DB️ {event.get('source', '')}</div>
+      <div class="sl-head">
+        <a class="sl-title" href="{event.get('url', '')}" target="_blank">{event.get('title', '')}</a>
+      </div>
+      <div class="sl-meta">{dept} · 조회 {event.get('view_count', 0):,} · {event.get('announced_at', '')}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
 def footer(note):
     st.markdown(f'<div class="footer">프롭티어 · 부동산 AI 주요뉴스 봇 &nbsp;|&nbsp; {note}</div>', unsafe_allow_html=True)

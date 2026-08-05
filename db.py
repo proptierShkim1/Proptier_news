@@ -249,6 +249,12 @@ def insert_policy_event(record: dict) -> bool:
         return cur.rowcount > 0
 
 
+def count_policy_events() -> int:
+    init_db()
+    with sqlite3.connect(DB_PATH) as con:
+        return con.execute("SELECT COUNT(*) FROM policy_events").fetchone()[0]
+
+
 def get_policy_events(department: str = "", limit: int = 3000) -> list[dict]:
     init_db()
     query = "SELECT * FROM policy_events WHERE 1=1"

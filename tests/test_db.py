@@ -68,6 +68,14 @@ def test_insert_policy_event_returns_false_for_duplicate_url(tmp_path, monkeypat
     assert db.insert_policy_event(_policy_event()) is False
 
 
+def test_count_policy_events_returns_total_row_count(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_policy_event(_policy_event(url="https://x/1"))
+    db.insert_policy_event(_policy_event(url="https://x/2"))
+
+    assert db.count_policy_events() == 2
+
+
 def test_get_policy_events_filters_by_department_and_orders_by_announced_at_desc(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     db.insert_policy_event(_policy_event(
