@@ -3,6 +3,7 @@ hana_p — mentions 원본 데이터를 "오늘의 뉴스" 화면 표시 형태�
 카테고리 분류·점수·메달은 실제 수집 데이터에 없는 필드라 키워드 기반 휴리스틱으로 계산한다.
 """
 
+import re
 from datetime import datetime, timedelta
 
 from utils import load_channel_visibility, load_keywords
@@ -29,6 +30,13 @@ CATEGORY_EMOJI = {
 }
 FALLBACK_CATEGORY = "일반"
 FALLBACK_EMOJI = "📰"
+CLUSTER_SIMILARITY_THRESHOLD = 0.35
+CLUSTER_WINDOW_HOURS = 48
+_TITLE_STOPWORDS = {
+    "의", "가", "이", "은", "는", "을", "를", "에", "에서", "와", "과", "도", "만",
+    "등", "것", "수", "위해", "관련", "대한", "이번", "오늘",
+}
+_TITLE_TOKEN_RE = re.compile(r"\[[^\]]*\]|[^\w가-힣\s]")
 CATEGORY_COLORS = {
     "신규 도입": ("#fff1e0", "#c2660c"),
     "AI": ("#e7f0ff", "#1d4ed8"),
@@ -199,27 +207,81 @@ def build_action_radar(mentions: list[dict]) -> tuple:
     return (total, top_brand)
 
 
+def _title_tokens(title: str) -> set:
+    """제목에서 [태그]와 문장부호를 제거하고, 2글자 이상·불용어가 아닌 단어만 남긴다."""
+    cleaned = _TITLE_TOKEN_RE.sub(" ", title)
+    return {t for t in cleaned.split() if len(t) >= 2 and t not in _TITLE_STOPWORDS}
+
+
+def _jaccard(a: set, b: set) -> float:
+    if not a or not b:
+        return 0.0
+    union = len(a | b)
+    return len(a & b) / union if union else 0.0
+
+
+def _cluster_mentions(mentions: list[dict]) -> list[list[dict]]:
+    """같은 브랜드 + 제목 단어가 많이 겹침(자카드 유사도) + CLUSTER_WINDOW_HOURS 이내에
+    수집된 기사를 하나의 이슈로 묶는다. 실제 동일 사건 판정이 아니라 가벼운 휴리스틱이라,
+    표현이 많이 다른 헤드라인은 같은 사건이어도 묶이지 않을 수 있다."""
+    ordered = sorted(mentions, key=lambda m: m.get("collected_at") or "")
+    clusters: list[dict] = []
+    for m in ordered:
+        collected = _parse_collected_at(m.get("collected_at", ""))
+        tokens = _title_tokens(m.get("title", ""))
+        best = None
+        for c in clusters:
+            if c["brand"] != m.get("brand"):
+                continue
+            last_collected = c["last_collected"]
+            if last_collected and collected:
+                gap_hours = abs((collected - last_collected).total_seconds()) / 3600
+                if gap_hours > CLUSTER_WINDOW_HOURS:
+                    continue
+            if _jaccard(tokens, c["tokens"]) >= CLUSTER_SIMILARITY_THRESHOLD:
+                best = c
+                break
+        if best is not None:
+            best["mentions"].append(m)
+            best["tokens"] |= tokens
+            if collected and (best["last_collected"] is None or collected > best["last_collected"]):
+                best["last_collected"] = collected
+        else:
+            clusters.append({
+                "brand": m.get("brand"), "tokens": tokens,
+                "mentions": [m], "last_collected": collected,
+            })
+    return [c["mentions"] for c in clusters]
+
+
 def build_issues(mentions: list[dict], now: datetime | None = None) -> list[dict]:
-    """mentions 각 건을 "부동산사 동향" 페이지의 이슈 카드 1건으로 변환한다.
-    실제 이슈 클러스터링(같은 사건 여러 기사 묶기)은 하지 않고, 건별로 1개 카드를 만든다."""
+    """mentions를 (브랜드+제목 유사도+시간창) 기준으로 클러스터링해 "부동산사 동향"
+    페이지의 이슈 카드로 변환한다. 한 이슈 카드가 여러 기사를 대표할 수 있다."""
     now = now or datetime.now()
     issues = []
-    for m in mentions:
-        categories = categorize(f"{m.get('title', '')} {m.get('snippet', '')}")
+    for cluster in _cluster_mentions(mentions):
+        cluster = sorted(cluster, key=lambda m: m.get("collected_at") or "")
+        rep = cluster[0]
+        categories = categorize(f"{rep.get('title', '')} {rep.get('snippet', '')}")
         primary = next((c for c in CATEGORY_ORDER if c in categories), categories[0])
         bg, fg = CATEGORY_COLORS.get(primary, CATEGORY_COLORS[FALLBACK_CATEGORY])
-        collected = _parse_collected_at(m.get("collected_at", ""))
-        date_str = collected.strftime("%Y-%m-%d") if collected else (m.get("collected_at", "") or "")[:10]
+        rep_collected = _parse_collected_at(rep.get("collected_at", ""))
+        date_str = rep_collected.strftime("%Y-%m-%d") if rep_collected else (rep.get("collected_at", "") or "")[:10]
+        live = any(_is_recent(m, now) for m in cluster)
+        articles = sorted(
+            [(m.get("collected_at", "") or "", m.get("title", ""), m.get("url", "")) for m in cluster],
+            reverse=True,
+        )
         issues.append({
-            "firm": m.get("brand", ""),
+            "firm": rep.get("brand", ""),
             "cat": f"{CATEGORY_EMOJI.get(primary, FALLBACK_EMOJI)} {primary}",
             "cat_bg": bg,
             "cat_fg": fg,
-            "title": m.get("title", ""),
-            "count": 1,
+            "title": rep.get("title", ""),
+            "count": len(cluster),
             "date": date_str,
-            "live": _is_recent(m, now),
-            "articles": [(m.get("collected_at", "") or "", m.get("title", ""), m.get("url", ""))],
+            "live": live,
+            "articles": articles,
         })
     return issues
 
