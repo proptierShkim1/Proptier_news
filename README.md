@@ -12,6 +12,7 @@
 | 📝 브리핑 | 날짜별 아침 브리핑 아카이브 |
 | 🔍 뉴스 검색 | 키워드·기간·부동산사 필터링 검색 |
 | 📄 PDF 보고서 | 표지 + 랭킹 1~5위 카드뉴스 형태(1080×1080, 6페이지) — 실제 다운로드 가능한 PDF 생성 |
+| 🏛️ 정책 뉴스 | 정부 정책 보도자료 전용 화면 — hero/지표, 경영진 브리핑, 발표 추이 차트, 카테고리 탭별 점수 랭킹 |
 | ⚙️ 설정 (관리자 전용) | 접근 제어(IP 화이트리스트) · 데이터 수집 · 데이터 관리 · 서버 배포 |
 
 오늘의 뉴스/부동산사 동향/브리핑/뉴스 검색/PDF 보고서 5개 화면 모두 `data/news.db`(SQLite)의
@@ -54,6 +55,10 @@
   등록 전까지는 자동 수집이 실행되지 않는다(화면에 경고 표시) — "지금 수집" 버튼으로 수동 실행 가능
 - **조회/삭제**: 설정 페이지 "데이터 관리 > 정부 정책" 탭에서 분류/제목/등록일로 필터링해 조회하고,
   개별 또는 전체 삭제 가능 (브랜드 조회 탭과 동일한 페이지네이션 UI 공유)
+- **정책 뉴스 화면**: `policy_feed.py`가 보도자료 제목 키워드로 5개 카테고리(규제·법령/지원·사업/
+  통계·조사/조직·인사/행사·홍보)를 분류하고 최신성·조회수 기반 점수/메달을 매겨, `news_today.py`와
+  동일한 패턴(Executive Brief·발표 추이 차트·카테고리 탭·점수 랭킹 카드)으로 `views/policy_news.py`에서
+  렌더링한다
 
 ## 접근 제어
 
@@ -116,6 +121,7 @@ app.py              진입점 — 접근 제어, DB 초기화, 스케줄러 기�
 theme.py            공통 CSS(오렌지 테마) 및 재사용 컴포넌트
 data.py             (레거시, 미사용) 과거 샘플 데이터 — 현재 어떤 화면도 참조하지 않음
 news_feed.py        mentions 원본 → 화면 표시용 가공 (카테고리 분류·점수·메달·이슈·브리핑, 채널 표시 필터)
+policy_feed.py      policy_events 원본 → 화면 표시용 가공 (정책 카테고리 분류·점수·메달·발표 추이)
 access_control.py    IP 화이트리스트 · 관리자 판별
 db.py               수집 데이터 SQLite 저장소
 report_pdf.py        PDF 보고서 카드덱 HTML 템플릿 + Playwright PDF 생성 (미리보기와 공유)
@@ -123,7 +129,7 @@ collector.py         키워드×채널 수집 조율, 노이즈 필터링, 일�
 scheduler.py         자동 수집 스케줄러(백그라운드 스레드, 3개 독립 파이프라인)
 utils.py             키워드/스케줄/채널 표시 설정 로드·저장, 상대 날짜 변환
 crawlers/            네이버·구글·다음·디시인사이드 스크래퍼 + 네이버뉴스API(공식 API) + 정책 7개 기관
-views/               페이지별 렌더 함수 (news_today, firms, briefings, search, report, settings)
+views/               페이지별 렌더 함수 (news_today, firms, briefings, search, report, policy_news, settings)
 data/                런타임 설정·DB (access_config.json, keywords.json, news.db 등 — git 미포함)
 scripts/start_server.sh  원격 서버 기동 스크립트
 ```
