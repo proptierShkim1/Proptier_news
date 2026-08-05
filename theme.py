@@ -224,15 +224,14 @@ def news_card(item, rank_display, top_class=""):
     """, unsafe_allow_html=True)
 
 
-def policy_card(event):
-    dept = event.get("department") or "-"
+def policy_signal_card(item, rank_display, top_class=""):
     st.markdown(f"""
-    <div class="sl-item">
-      <div class="sl-signal">\U0001F3DB️ {event.get('source', '')}</div>
-      <div class="sl-head">
-        <a class="sl-title" href="{event.get('url', '')}" target="_blank">{event.get('title', '')}</a>
-      </div>
-      <div class="sl-meta">{dept} · 조회 {event.get('view_count', 0):,} · {event.get('announced_at', '')}</div>
+    <div class="sl-item {top_class}">
+      <div class="sl-signal">{item['signal']}</div>
+      <div class="sl-head"><span class="sl-rank">{rank_display}</span>
+        <a class="sl-title" href="{item['url']}" target="_blank">{item['title']}</a>
+        <span class="sl-score">점수 {item['score']}</span></div>
+      <div class="sl-meta">{item['source']} · {item['department']} · 조회 {item['view_count']:,} · {item['announced_at']}</div>
     </div>
     """, unsafe_allow_html=True)
 
