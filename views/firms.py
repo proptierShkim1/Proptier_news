@@ -33,13 +33,18 @@ def render():
         "실제 수집(mentions) 데이터를 건별 이슈 카드로 표시",
     )
 
+    st.markdown('<div class="sc-box">', unsafe_allow_html=True)
+    query = st.text_input(
+        "검색어", placeholder="검색어 입력 — 여러 단어는 띄어쓰기 (모두 포함된 이슈만 표시)",
+        label_visibility="collapsed", key="firms_search_query",
+    )
     period = st.segmented_control(
         "\U0001F5D3️ 이슈 기간", list(_PERIOD_DAYS.keys()),
         default="누적 전체", label_visibility="collapsed",
     )
-    period = period or "누적 전체"
-
     firm_pick = st.selectbox("\U0001F3E2 부동산사 필터", ["전체"] + firms)
+    st.markdown('</div>', unsafe_allow_html=True)
+    period = period or "누적 전체"
 
     days = _PERIOD_DAYS[period]
     filtered = issues
@@ -49,7 +54,14 @@ def render():
     if firm_pick != "전체":
         filtered = [iss for iss in filtered if iss.get("firm") == firm_pick]
 
-    st.caption(f"현재 필터: {period} · {firm_pick} · 이슈 {len(filtered):,}건 / 전체 {len(issues):,}건")
+    terms = query.lower().split() if query else []
+    if terms:
+        filtered = [iss for iss in filtered if all(t in iss.get("title", "").lower() for t in terms)]
+
+    st.caption(
+        f"현재 필터: {period} · {firm_pick} · 이슈 {len(filtered):,}건 / 전체 {len(issues):,}건"
+        + (f" · 검색어: {query}" if query else "")
+    )
 
     st.markdown('<h2 class="sec">\U0001F5C2️ 이슈 타임라인</h2>', unsafe_allow_html=True)
     monthly = {}

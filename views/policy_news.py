@@ -81,11 +81,24 @@ def render():
         with st.popover("❓"):
             st.markdown(policy_feed.category_legend_markdown())
 
+    st.markdown('<div class="sc-box">', unsafe_allow_html=True)
+    query = st.text_input(
+        "검색어", placeholder="검색어 입력 — 여러 단어는 띄어쓰기 (모두 포함된 보도자료만 표시)",
+        label_visibility="collapsed", key="policy_search_query",
+    )
     source_pick = st.selectbox("기관 필터", ["전체"] + _SOURCES)
+    st.markdown('</div>', unsafe_allow_html=True)
+
     filtered_events = events if source_pick == "전체" else [e for e in events if e["source"] == source_pick]
+    terms = query.lower().split() if query else []
+    if terms:
+        filtered_events = [
+            e for e in filtered_events
+            if all(t in f"{e.get('title', '')} {e.get('department', '')}".lower() for t in terms)
+        ]
     display_items = policy_feed.build_policy_items(filtered_events, now)[:policy_feed.DISPLAY_LIMIT]
 
-    st.caption(f"조회 결과 {len(display_items):,}건")
+    st.caption(f"조회 결과 {len(display_items):,}건 · 기관: {source_pick}" + (f" · 검색어: {query}" if query else ""))
 
     category_labels = [f"📋 전체 ({len(display_items):,})"] + [
         f"{name} ({sum(1 for it in display_items if name in it['categories']):,})"
