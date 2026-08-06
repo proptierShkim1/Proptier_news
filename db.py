@@ -8,6 +8,14 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).resolve().parent / "data" / "news.db"
 
+
+def _connect() -> sqlite3.Connection:
+    """동시 여러 사용자가 접근할 때 쓰기 잠금으로 인한 'database is locked' 오류를 줄이려고
+    busy timeout을 기본값(5초)보다 넉넉하게 준다. WAL 모드(읽기가 쓰기를 막지 않음)는
+    init_db()에서 DB 파일당 한 번만 설정하면 되므로 여기서 매번 반복하지 않는다."""
+    return sqlite3.connect(DB_PATH, timeout=30.0)
+
+
 _MENTIONS_SQL = """
 CREATE TABLE IF NOT EXISTS mentions (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,7 +89,12 @@ def _ensure_column(con: sqlite3.Connection, table: str, column: str, definition:
 
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(DB_PATH) as con:
+    with _connect() as con:
+        # WAL 모드에서는 읽기가 쓰기를 막지 않고 쓰기도 읽기를 막지 않는다(쓰기끼리는 여전히
+        # 직렬화됨) — 여러 사용자가 동시에 접속할 때 기본 롤백저널 모드보다 잠금 경쟁이 훨씬
+        # 적다. DB 파일에 한 번 설정되면 이후 연결에도 유지되므로 매번 다시 설정해도 비용이
+        # 거의 없다(이미 WAL이면 no-op).
+        con.execute("PRAGMA journal_mode=WAL")
         con.execute(_MENTIONS_SQL)
         con.execute(_RUN_LOGS_SQL)
         con.execute(_POLICY_EVENTS_SQL)
@@ -99,7 +112,7 @@ def insert_mention(record: dict) -> bool:
         "content": record.get("content", ""),
         "summary": record.get("summary", ""),
     }
-    with sqlite3.connect(DB_PATH) as con:
+    with _connect() as con:
         cur = con.execute(
             "INSERT OR IGNORE INTO mentions "
             "(brand, channel, source_detail, title, url, snippet, posted_at, collected_at, "
@@ -114,7 +127,7 @@ def insert_mention(record: dict) -> bool:
 def update_mention_summary(mention_id: int, summary: str) -> None:
     """기존 mention 1건의 summary만 갱신한다 (수집 시점에 놓친 건을 뒤늦게 요약해 채울 때 사용)."""
     init_db()
-    with sqlite3.connect(DB_PATH) as con:
+    with _connect() as con:
         con.execute(
             "UPDATE mentions SET summary = :summary WHERE id = :id",
             {"summary": summary, "id": mention_id},
@@ -124,7 +137,7 @@ def update_mention_summary(mention_id: int, summary: str) -> None:
 def insert_run_log(entry: dict) -> None:
     init_db()
     entry = {**entry, "run_id": entry.get("run_id", "")}
-    with sqlite3.connect(DB_PATH) as con:
+    with _connect() as con:
         con.execute(
             "INSERT INTO run_logs "
             "(ran_at, trigger, brand, channel, fetched, inserted, skipped, ok, message, run_id) "
@@ -135,7 +148,7 @@ def insert_run_log(entry: dict) -> None:
 
 def count_mentions() -> int:
     init_db()
-    with sqlite3.connect(DB_PATH) as con:
+    with _connect() as con:
         return con.execute("SELECT COUNT(*) FROM mentions").fetchone()[0]
 
 
@@ -161,7 +174,7 @@ def get_mentions(
         query += " AND channel = :channel"
         params["channel"] = channel
     query += " ORDER BY collected_at DESC LIMIT :limit"
-    with sqlite3.connect(DB_PATH) as con:
+    with _connect() as con:
         con.row_factory = sqlite3.Row
         rows = con.execute(query, params).fetchall()
         return [dict(r) for r in rows]
@@ -171,7 +184,7 @@ def delete_mentions(ids: list[int]) -> int:
     if not ids:
         return 0
     init_db()
-    with sqlite3.connect(DB_PATH) as con:
+    with _connect() as con:
         placeholders = ",".join("?" * len(ids))
         cur = con.execute(f"DELETE FROM mentions WHERE id IN ({placeholders})", ids)
         return cur.rowcount
@@ -179,14 +192,14 @@ def delete_mentions(ids: list[int]) -> int:
 
 def delete_all_mentions() -> int:
     init_db()
-    with sqlite3.connect(DB_PATH) as con:
+    with _connect() as con:
         cur = con.execute("DELETE FROM mentions")
         return cur.rowcount
 
 
 def get_run_logs(limit: int = 50) -> list[dict]:
     init_db()
-    with sqlite3.connect(DB_PATH) as con:
+    with _connect() as con:
         con.row_factory = sqlite3.Row
         rows = con.execute(
             "SELECT * FROM run_logs ORDER BY ran_at DESC LIMIT :limit", {"limit": limit}
@@ -209,7 +222,7 @@ def get_run_batches(limit: int = 50, channels: list[str] | None = None) -> list[
         params = {f"ch{i}": ch for i, ch in enumerate(channels)}
     query += " ORDER BY ran_at ASC, id ASC LIMIT 2000"
 
-    with sqlite3.connect(DB_PATH) as con:
+    with _connect() as con:
         con.row_factory = sqlite3.Row
         rows = [dict(r) for r in con.execute(query, params).fetchall()]
 
@@ -261,7 +274,7 @@ def get_run_batches(limit: int = 50, channels: list[str] | None = None) -> list[
 def insert_policy_event(record: dict) -> bool:
     """새 정책 이벤트 1건 저장. url이 이미 있으면 False(중복 스킵), 새로 저장되면 True."""
     init_db()
-    with sqlite3.connect(DB_PATH) as con:
+    with _connect() as con:
         cur = con.execute(
             "INSERT OR IGNORE INTO policy_events "
             "(source, title, url, department, announced_at, view_count, collected_at) "
@@ -273,7 +286,7 @@ def insert_policy_event(record: dict) -> bool:
 
 def count_policy_events() -> int:
     init_db()
-    with sqlite3.connect(DB_PATH) as con:
+    with _connect() as con:
         return con.execute("SELECT COUNT(*) FROM policy_events").fetchone()[0]
 
 
@@ -285,7 +298,7 @@ def get_policy_events(department: str = "", limit: int = 3000) -> list[dict]:
         query += " AND department = :department"
         params["department"] = department
     query += " ORDER BY announced_at DESC LIMIT :limit"
-    with sqlite3.connect(DB_PATH) as con:
+    with _connect() as con:
         con.row_factory = sqlite3.Row
         rows = con.execute(query, params).fetchall()
         return [dict(r) for r in rows]
@@ -296,7 +309,7 @@ def delete_policy_events(ids: list[int]) -> int:
     if not ids:
         return 0
     init_db()
-    with sqlite3.connect(DB_PATH) as con:
+    with _connect() as con:
         placeholders = ",".join("?" * len(ids))
         cur = con.execute(f"DELETE FROM policy_events WHERE id IN ({placeholders})", ids)
         return cur.rowcount
@@ -305,7 +318,7 @@ def delete_policy_events(ids: list[int]) -> int:
 def delete_all_policy_events() -> int:
     """policy_events 테이블의 모든 행을 삭제하고 삭제된 건수를 반환한다."""
     init_db()
-    with sqlite3.connect(DB_PATH) as con:
+    with _connect() as con:
         cur = con.execute("DELETE FROM policy_events")
         return cur.rowcount
 
@@ -313,7 +326,7 @@ def delete_all_policy_events() -> int:
 def insert_policy_run_log(entry: dict) -> None:
     init_db()
     entry = {**entry, "run_id": entry.get("run_id", "")}
-    with sqlite3.connect(DB_PATH) as con:
+    with _connect() as con:
         con.execute(
             "INSERT INTO policy_run_logs "
             "(ran_at, trigger, source, fetched, inserted, skipped, ok, message, run_id) "
@@ -324,7 +337,7 @@ def insert_policy_run_log(entry: dict) -> None:
 
 def get_policy_run_logs(limit: int = 50) -> list[dict]:
     init_db()
-    with sqlite3.connect(DB_PATH) as con:
+    with _connect() as con:
         con.row_factory = sqlite3.Row
         rows = con.execute(
             "SELECT * FROM policy_run_logs ORDER BY ran_at DESC LIMIT :limit", {"limit": limit}
@@ -337,7 +350,7 @@ def get_policy_run_batches(limit: int = 50) -> list[dict]:
     신설된 것이라 run_logs/get_run_batches와 달리 레거시(run_id 없는) 행에 대한
     시간-간격 추정 묶음 로직이 필요 없다."""
     init_db()
-    with sqlite3.connect(DB_PATH) as con:
+    with _connect() as con:
         con.row_factory = sqlite3.Row
         rows = [dict(r) for r in con.execute(
             "SELECT * FROM policy_run_logs ORDER BY ran_at ASC, id ASC LIMIT 2000"

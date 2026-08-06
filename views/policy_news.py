@@ -2,7 +2,7 @@ from datetime import datetime
 
 import streamlit as st
 
-import db
+import cached_db
 import policy_feed
 import theme
 
@@ -11,7 +11,7 @@ _SOURCES = ["국토교통부", "한국부동산원", "LH", "서울시", "HF", "H
 
 def render():
     now = datetime.now()
-    events = db.get_policy_events(limit=2000)
+    events = cached_db.get_policy_events(limit=2000)
 
     if not events:
         theme.hero(
@@ -22,7 +22,7 @@ def render():
         theme.footer("실데이터 연동 · 수집 대기 중")
         return
 
-    total_count = db.count_policy_events()
+    total_count = cached_db.count_policy_events()
     recent_count = sum(1 for e in events if policy_feed._is_recent(e, now))
     source_counts = {}
     for e in events:

@@ -5,6 +5,7 @@ hana_p — mentions 원본 데이터를 "오늘의 뉴스" 화면 표시 형태�
 
 import re
 from datetime import datetime, timedelta
+from functools import lru_cache
 
 from utils import load_channel_visibility, load_keywords
 
@@ -81,7 +82,11 @@ def all_brand_names() -> list[str]:
     return [b["name"] for b in load_keywords().get("brands", [])]
 
 
+@lru_cache(maxsize=4096)
 def categorize(text: str) -> list[str]:
+    """build_news_items/build_metrics/build_issue_pulse/build_action_radar가 같은 mention의
+    (title, snippet) 텍스트로 각자 categorize()를 다시 호출해 렌더링 한 번에 최대 4배 중복
+    계산되던 걸 캐싱으로 줄인다. 결과 리스트는 호출부에서 항상 읽기만 하므로 캐시 공유가 안전."""
     matched = [name for name, kws in CATEGORY_KEYWORDS.items() if any(k in text for k in kws)]
     return matched or [FALLBACK_CATEGORY]
 

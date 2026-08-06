@@ -13,6 +13,7 @@ COLLECTION_SCHEDULE_FILE = DATA_DIR / "collection_schedule.json"
 POLICY_COLLECTION_SCHEDULE_FILE = DATA_DIR / "policy_collection_schedule.json"
 NAVER_NEWS_COLLECTION_SCHEDULE_FILE = DATA_DIR / "naver_news_collection_schedule.json"
 CHANNEL_VISIBILITY_FILE = DATA_DIR / "channel_visibility.json"
+AGENT_CHAT_HISTORY_FILE = DATA_DIR / "agent_chat_history.json"
 ALL_MENTION_CHANNELS = ["네이버", "구글", "다음", "커뮤니티", "네이버뉴스API"]
 
 
@@ -97,6 +98,22 @@ def load_channel_visibility() -> list:
 
 def save_channel_visibility(channels: list) -> None:
     save_json(CHANNEL_VISIBILITY_FILE, {"enabled_channels": channels})
+
+
+def load_agent_chat_history(ip: str) -> list:
+    """AI AGENT 채팅 기록을 접속 IP 기준으로 불러온다 — F5 새로고침이나 다른 탭 이동 시에도
+    대화가 유지되도록 session_state가 아니라 파일에 저장한다. IP 기반 접근 제어를 쓰는
+    이 앱의 기존 사용자 식별 방식과 동일하게 IP를 키로 쓴다."""
+    all_histories = load_json(AGENT_CHAT_HISTORY_FILE, {})
+    return all_histories.get(ip, []) if ip else []
+
+
+def save_agent_chat_history(ip: str, history: list) -> None:
+    if not ip:
+        return
+    all_histories = load_json(AGENT_CHAT_HISTORY_FILE, {})
+    all_histories[ip] = history
+    save_json(AGENT_CHAT_HISTORY_FILE, all_histories)
 
 
 _RELATIVE_KOREAN_DATE_RE = re.compile(r"^(\d+)(분|시간|일)\s*전$")

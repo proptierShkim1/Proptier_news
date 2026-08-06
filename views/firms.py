@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 
 import streamlit as st
 
-import db
+import cached_db
 import news_feed
 import theme
 
@@ -16,7 +16,7 @@ def _issue_date(iss):
 def render():
     now = datetime.now()
     today = now.date()
-    mentions = db.get_mentions(limit=news_feed.BROAD_LIMIT, channels=news_feed.enabled_channels())
+    mentions = cached_db.get_mentions(limit=news_feed.BROAD_LIMIT, channels=tuple(news_feed.enabled_channels()))
 
     if not mentions:
         theme.hero("\U0001F3E2 부동산사별 이슈 동향", f"기준 {today.isoformat()} · 아직 수집된 데이터가 없습니다")

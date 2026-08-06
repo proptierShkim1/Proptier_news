@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 from dotenv import load_dotenv
 
+import cached_db
 import collector
 import db
 from access_control import load_config, save_config, name_for_ip
@@ -850,6 +851,7 @@ def _render_brand_lookup_tab():
     del_col, count_col = st.columns([1, 5])
     if del_col.button("🗑 선택 삭제", key="lookup_delete_button", disabled=not selected_ids):
         deleted = db.delete_mentions(selected_ids)
+        cached_db.clear()
         st.success(f"{deleted:,}건 삭제했습니다.")
         st.rerun()
     count_col.caption(f"선택된 항목: {len(selected_ids):,}건")
@@ -860,6 +862,7 @@ def _render_brand_lookup_tab():
     )
     if st.button("🗑️ 전체 삭제", key="lookup_delete_all_button", disabled=not delete_all_confirm):
         deleted = db.delete_all_mentions()
+        cached_db.clear()
         st.success(f"전체 {deleted:,}건을 삭제했습니다.")
         st.rerun()
 
@@ -970,6 +973,7 @@ def _render_policy_lookup_tab():
     del_col, count_col = st.columns([1, 5])
     if del_col.button("🗑 선택 삭제", key="policy_lookup_delete_button", disabled=not selected_ids):
         deleted = db.delete_policy_events(selected_ids)
+        cached_db.clear()
         st.success(f"{deleted:,}건 삭제했습니다.")
         st.rerun()
     count_col.caption(f"선택된 항목: {len(selected_ids):,}건")
@@ -982,6 +986,7 @@ def _render_policy_lookup_tab():
         "🗑️ 전체 삭제", key="policy_lookup_delete_all_button", disabled=not delete_all_confirm,
     ):
         deleted = db.delete_all_policy_events()
+        cached_db.clear()
         st.success(f"전체 {deleted:,}건을 삭제했습니다.")
         st.rerun()
 

@@ -11,5 +11,6 @@ data/collection_schedule.json
 data/policy_collection_schedule.json
 data/naver_news_collection_schedule.json
 data/channel_visibility.json
+data/agent_chat_history.json
 data/deploy_log.jsonl
 data/scheduler.log

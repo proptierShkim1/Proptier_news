@@ -2,6 +2,7 @@ import streamlit as st
 
 import agent_chat
 import theme
+import utils
 
 
 def render():
@@ -16,11 +17,14 @@ def render():
         theme.footer("AI AGENT · Gemini 연동 대기 중")
         return
 
+    client_ip = st.session_state.get("_client_ip", "")
+
     if "agent_chat_history" not in st.session_state:
-        st.session_state["agent_chat_history"] = []
+        st.session_state["agent_chat_history"] = utils.load_agent_chat_history(client_ip)
 
     if st.button("\U0001F504 대화 초기화"):
         st.session_state["agent_chat_history"] = []
+        utils.save_agent_chat_history(client_ip, [])
         st.rerun()
 
     for turn in st.session_state["agent_chat_history"]:
@@ -40,5 +44,6 @@ def render():
 
         history.append({"role": "user", "content": user_input})
         history.append({"role": "assistant", "content": reply})
+        utils.save_agent_chat_history(client_ip, history)
 
     theme.footer("AI AGENT · Gemini 연동 · 수집 데이터 기반 벡터 검색은 추후 추가")

@@ -1,12 +1,12 @@
 import streamlit as st
 
-import db
+import cached_db
 import news_feed
 import theme
 
 
 def render():
-    mentions = db.get_mentions(limit=news_feed.BROAD_LIMIT, channels=news_feed.enabled_channels())
+    mentions = cached_db.get_mentions(limit=news_feed.BROAD_LIMIT, channels=tuple(news_feed.enabled_channels()))
 
     if not mentions:
         theme.hero("\U0001F4DD 브리핑 아카이브", "아직 수집된 데이터가 없습니다")

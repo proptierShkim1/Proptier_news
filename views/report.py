@@ -1,5 +1,6 @@
 import streamlit as st
 
+import cached_db
 import db
 import news_feed
 import summarizer
@@ -11,7 +12,9 @@ def _ensure_pdf_summaries(items: list[dict]) -> None:
     """PDF에 실제로 나오는 상위 항목(top5)에 대해서만 AI 요약을 만든다 — 전체 수집
     기사를 대상으로 하면 대부분 PDF에 나오지도 않을 항목까지 호출하는 낭비가 생긴다.
     원문(content)이 있고 아직 summary가 비어있는 항목만 호출하고, 결과는 DB에 저장해
-    다음 번 렌더링부터는 다시 호출하지 않는다."""
+    다음 번 렌더링부터는 다시 호출하지 않는다. 캐시된 mentions 조회 결과도 함께 비워서,
+    같은 TTL(60초) 안에 다른 사용자가 같은 항목을 다시 요약 호출하지 않도록 한다."""
+    updated = False
     for item in items:
         if item.get("content") and not item.get("summary") and item.get("mention_id"):
             ai_summary = summarizer.summarize_article(item["title"], item["content"])
@@ -19,6 +22,9 @@ def _ensure_pdf_summaries(items: list[dict]) -> None:
                 db.update_mention_summary(item["mention_id"], ai_summary)
                 item["summary"] = ai_summary
                 item["desc_long"] = [ai_summary]
+                updated = True
+    if updated:
+        cached_db.get_mentions.clear()
 
 
 def render():
@@ -27,7 +33,7 @@ def render():
         "오늘의 브리핑을 카드뉴스 형태의 인쇄용 PDF로 내보냅니다 · 아래 미리보기와 동일한 구성으로 다운로드됩니다",
     )
 
-    mentions = db.get_mentions(limit=news_feed.RECENT_LIMIT, channels=news_feed.enabled_channels())
+    mentions = cached_db.get_mentions(limit=news_feed.RECENT_LIMIT, channels=tuple(news_feed.enabled_channels()))
     if not mentions:
         st.info("아직 수집된 데이터가 없습니다. 설정 → 데이터 수집에서 수집을 먼저 실행해주세요.")
         theme.footer("실데이터 연동 · 수집 대기 중")
@@ -36,7 +42,7 @@ def render():
     news_items = news_feed.build_news_items(mentions, news_feed.own_brand_names())
     top5 = news_items[:5]
     _ensure_pdf_summaries(top5)
-    total_count = db.count_mentions()
+    total_count = cached_db.count_mentions()
     ai_count = sum(1 for it in news_items if "AI" in it["categories"])
 
     col_dl, col_note = st.columns([1, 3])

@@ -4,6 +4,7 @@ news_feed.py와 같은 패턴(키워드 기반 카테고리·점수·메달 휴�
 """
 
 from datetime import datetime, timedelta
+from functools import lru_cache
 
 RECENCY_DAYS = 3
 DISPLAY_LIMIT = 30
@@ -23,7 +24,10 @@ FALLBACK_CATEGORY = "일반"
 FALLBACK_EMOJI = "📰"
 
 
+@lru_cache(maxsize=4096)
 def categorize(title: str) -> list[str]:
+    """build_policy_items/build_policy_pulse가 같은 title로 각자 categorize()를 다시
+    호출하는 중복을 캐싱으로 줄인다."""
     matched = [name for name, kws in POLICY_CATEGORY_KEYWORDS.items() if any(k in title for k in kws)]
     return matched or [FALLBACK_CATEGORY]
 

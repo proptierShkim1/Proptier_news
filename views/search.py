@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 
 import streamlit as st
 
-import db
+import cached_db
 import news_feed
 import theme
 
@@ -12,7 +12,7 @@ _PERIOD_DAYS = {"전체": None, "최근 90일": 90, "최근 30일": 30, "최근 
 def render():
     theme.hero(
         "\U0001F50D 지난 뉴스 검색",
-        f"누적 수집 {db.count_mentions():,}건 · 키워드·기간·부동산사로 바로 필터링",
+        f"누적 수집 {cached_db.count_mentions():,}건 · 키워드·기간·부동산사로 바로 필터링",
     )
 
     st.markdown('<div class="sc-box">', unsafe_allow_html=True)
@@ -30,9 +30,9 @@ def render():
     st.markdown('</div>', unsafe_allow_html=True)
 
     period = period or "전체"
-    mentions = db.get_mentions(
+    mentions = cached_db.get_mentions(
         brand="" if firm == "전체" else firm,
-        channels=news_feed.enabled_channels(),
+        channels=tuple(news_feed.enabled_channels()),
         limit=news_feed.BROAD_LIMIT,
     )
 

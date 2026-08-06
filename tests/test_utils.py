@@ -108,3 +108,43 @@ def test_load_channel_visibility_ignores_unknown_channel_names(tmp_path, monkeyp
     save_channel_visibility(["네이버", "존재하지않는채널"])
 
     assert load_channel_visibility() == ["네이버"]
+
+
+def test_load_agent_chat_history_defaults_to_empty_list_when_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(utils, "AGENT_CHAT_HISTORY_FILE", tmp_path / "agent_chat_history.json")
+
+    assert utils.load_agent_chat_history("192.168.1.1") == []
+
+
+def test_save_and_load_agent_chat_history_roundtrips_for_given_ip(tmp_path, monkeypatch):
+    monkeypatch.setattr(utils, "AGENT_CHAT_HISTORY_FILE", tmp_path / "agent_chat_history.json")
+    history = [{"role": "user", "content": "안녕"}, {"role": "assistant", "content": "안녕하세요!"}]
+
+    utils.save_agent_chat_history("192.168.1.1", history)
+
+    assert utils.load_agent_chat_history("192.168.1.1") == history
+
+
+def test_agent_chat_history_is_isolated_per_ip(tmp_path, monkeypatch):
+    monkeypatch.setattr(utils, "AGENT_CHAT_HISTORY_FILE", tmp_path / "agent_chat_history.json")
+
+    utils.save_agent_chat_history("192.168.1.1", [{"role": "user", "content": "IP1 메시지"}])
+    utils.save_agent_chat_history("192.168.1.2", [{"role": "user", "content": "IP2 메시지"}])
+
+    assert utils.load_agent_chat_history("192.168.1.1") == [{"role": "user", "content": "IP1 메시지"}]
+    assert utils.load_agent_chat_history("192.168.1.2") == [{"role": "user", "content": "IP2 메시지"}]
+
+
+def test_load_agent_chat_history_returns_empty_list_for_blank_ip(tmp_path, monkeypatch):
+    monkeypatch.setattr(utils, "AGENT_CHAT_HISTORY_FILE", tmp_path / "agent_chat_history.json")
+
+    assert utils.load_agent_chat_history("") == []
+
+
+def test_save_agent_chat_history_does_nothing_for_blank_ip(tmp_path, monkeypatch):
+    history_file = tmp_path / "agent_chat_history.json"
+    monkeypatch.setattr(utils, "AGENT_CHAT_HISTORY_FILE", history_file)
+
+    utils.save_agent_chat_history("", [{"role": "user", "content": "무시되어야 함"}])
+
+    assert not history_file.exists()

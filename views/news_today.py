@@ -3,14 +3,14 @@ from datetime import datetime
 import streamlit as st
 
 import theme
-import db
+import cached_db
 import news_feed
 from utils import load_keywords
 
 
 def render():
     now = datetime.now()
-    mentions = db.get_mentions(limit=news_feed.RECENT_LIMIT, channels=news_feed.enabled_channels())
+    mentions = cached_db.get_mentions(limit=news_feed.RECENT_LIMIT, channels=tuple(news_feed.enabled_channels()))
 
     if not mentions:
         theme.hero(
@@ -21,7 +21,7 @@ def render():
         theme.footer("실데이터 연동 · 수집 대기 중")
         return
 
-    total_count = db.count_mentions()
+    total_count = cached_db.count_mentions()
     own_brands = {b["name"] for b in load_keywords().get("brands", []) if b.get("role") == "own"}
 
     news_items = news_feed.build_news_items(mentions, own_brands, now)
