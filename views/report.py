@@ -2,8 +2,23 @@ import streamlit as st
 
 import db
 import news_feed
+import summarizer
 import theme
 from report_pdf import build_deck_html, generate_pdf_bytes
+
+
+def _ensure_pdf_summaries(items: list[dict]) -> None:
+    """PDF에 실제로 나오는 상위 항목(top5)에 대해서만 AI 요약을 만든다 — 전체 수집
+    기사를 대상으로 하면 대부분 PDF에 나오지도 않을 항목까지 호출하는 낭비가 생긴다.
+    원문(content)이 있고 아직 summary가 비어있는 항목만 호출하고, 결과는 DB에 저장해
+    다음 번 렌더링부터는 다시 호출하지 않는다."""
+    for item in items:
+        if item.get("content") and not item.get("summary") and item.get("mention_id"):
+            ai_summary = summarizer.summarize_article(item["title"], item["content"])
+            if ai_summary:
+                db.update_mention_summary(item["mention_id"], ai_summary)
+                item["summary"] = ai_summary
+                item["desc_long"] = [ai_summary]
 
 
 def render():
@@ -20,6 +35,7 @@ def render():
 
     news_items = news_feed.build_news_items(mentions, news_feed.own_brand_names())
     top5 = news_items[:5]
+    _ensure_pdf_summaries(top5)
     total_count = db.count_mentions()
     ai_count = sum(1 for it in news_items if "AI" in it["categories"])
 

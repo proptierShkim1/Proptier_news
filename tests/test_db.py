@@ -46,6 +46,47 @@ def test_get_mentions_without_channels_falls_back_to_single_channel_filter(tmp_p
     assert [r["url"] for r in results] == ["https://x/1"]
 
 
+def test_insert_mention_defaults_summary_to_empty_string(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1"))
+
+    result = db.get_mentions()[0]
+
+    assert result["summary"] == ""
+
+
+def test_update_mention_summary_persists_summary_for_given_id(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1"))
+    mention_id = db.get_mentions()[0]["id"]
+
+    db.update_mention_summary(mention_id, "AI가 생성한 요약")
+
+    assert db.get_mentions()[0]["summary"] == "AI가 생성한 요약"
+
+
+def test_ensure_column_adds_missing_column_to_existing_table(tmp_path, monkeypatch):
+    """summary 컬럼이 없는 기존 DB 파일도 init_db() 호출만으로 안전하게 마이그레이션되는지 확인."""
+    import sqlite3
+
+    _isolate(tmp_path, monkeypatch)
+    with sqlite3.connect(db.DB_PATH) as con:
+        con.execute("""
+            CREATE TABLE mentions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, brand TEXT NOT NULL, channel TEXT NOT NULL,
+                source_detail TEXT NOT NULL DEFAULT '', title TEXT NOT NULL, url TEXT NOT NULL UNIQUE,
+                snippet TEXT DEFAULT '', posted_at TEXT DEFAULT '', collected_at TEXT NOT NULL,
+                search_term TEXT NOT NULL DEFAULT '', content TEXT NOT NULL DEFAULT ''
+            )
+        """)
+
+    db.init_db()
+
+    with sqlite3.connect(db.DB_PATH) as con:
+        cols = {row[1] for row in con.execute("PRAGMA table_info(mentions)")}
+    assert "summary" in cols
+
+
 def _policy_event(url="https://www.molit.go.kr/dtl.jsp?id=1", title="제목",
                    department="주택토지", announced_at="2026-07-20", view_count=100,
                    collected_at="2026-07-24 09:00:00"):

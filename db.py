@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS mentions (
     posted_at     TEXT DEFAULT '',
     collected_at  TEXT NOT NULL,
     search_term   TEXT NOT NULL DEFAULT '',
-    content       TEXT NOT NULL DEFAULT ''
+    content       TEXT NOT NULL DEFAULT '',
+    summary       TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -69,6 +70,15 @@ CREATE TABLE IF NOT EXISTS policy_run_logs (
 """
 
 
+def _ensure_column(con: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    """table에 column이 없으면 ALTER TABLE로 추가한다 — 스키마에 새 컬럼을 추가했을 때
+    이미 존재하는 DB 파일(CREATE TABLE IF NOT EXISTS는 기존 테이블엔 적용되지 않음)도
+    함께 마이그레이션되도록 한다."""
+    cols = {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
+    if column not in cols:
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(DB_PATH) as con:
@@ -76,6 +86,7 @@ def init_db() -> None:
         con.execute(_RUN_LOGS_SQL)
         con.execute(_POLICY_EVENTS_SQL)
         con.execute(_POLICY_RUN_LOGS_SQL)
+        _ensure_column(con, "mentions", "summary", "TEXT NOT NULL DEFAULT ''")
         con.execute("CREATE INDEX IF NOT EXISTS idx_mentions_collected_at ON mentions(collected_at)")
 
 
@@ -86,17 +97,28 @@ def insert_mention(record: dict) -> bool:
         **record,
         "search_term": record.get("search_term", ""),
         "content": record.get("content", ""),
+        "summary": record.get("summary", ""),
     }
     with sqlite3.connect(DB_PATH) as con:
         cur = con.execute(
             "INSERT OR IGNORE INTO mentions "
             "(brand, channel, source_detail, title, url, snippet, posted_at, collected_at, "
-            "search_term, content) "
+            "search_term, content, summary) "
             "VALUES (:brand, :channel, :source_detail, :title, :url, :snippet, :posted_at, "
-            ":collected_at, :search_term, :content)",
+            ":collected_at, :search_term, :content, :summary)",
             record,
         )
         return cur.rowcount > 0
+
+
+def update_mention_summary(mention_id: int, summary: str) -> None:
+    """기존 mention 1건의 summary만 갱신한다 (수집 시점에 놓친 건을 뒤늦게 요약해 채울 때 사용)."""
+    init_db()
+    with sqlite3.connect(DB_PATH) as con:
+        con.execute(
+            "UPDATE mentions SET summary = :summary WHERE id = :id",
+            {"summary": summary, "id": mention_id},
+        )
 
 
 def insert_run_log(entry: dict) -> None:

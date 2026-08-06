@@ -85,6 +85,14 @@
 - **배포 시 필수**: 원격 서버에는 `pip install`만으로는 브라우저 바이너리가 안 깔린다.
   최초 1회 `{venv}/bin/playwright install chromium`을 반드시 실행해야 한다 (현재 배포된
   `192.168.10.169` 서버에는 이미 설치되어 있음)
+- **AI 요약(Gemini)**: 상세 카드의 핵심 요약(`gist`)은 PDF에 실제로 나오는 상위 5건에 한해서만
+  Gemini로 생성한다 — 전체 수집 기사를 대상으로 하면 대부분 PDF에 나오지도 않을 항목까지
+  호출하는 낭비가 생기기 때문. `summarizer.py`가 `.env`의 `GEMINI_API_KEYS`(콤마로 구분한
+  키 목록, 한 키 실패 시 다음 키로 자동 failover)와 `GEMINI_MODEL`(기본 `gemini-2.5-flash`)을
+  사용하며, 원문(`content`)이 실제로 수집된 기사만 대상으로 한다(제목·짧은 스니펫만 있는 기사는
+  근거 부족으로 요약하지 않고 기존 발췌 방식을 그대로 씀). 생성된 요약은 `mentions.summary`
+  컬럼에 저장되어 같은 기사를 다시 요약하지 않는다 — `views/report.py`의 `_ensure_pdf_summaries()`가
+  top5 중 `summary`가 비어있는 항목만 호출한다
 
 ## 기술 스택
 
@@ -92,6 +100,7 @@
 - SQLite (수집 데이터) / JSON (키워드·스케줄·접근 제어 설정)
 - requests + BeautifulSoup / stdlib `xml.etree` (RSS) — 크롤링
 - Playwright(Chromium) — PDF 보고서 생성
+- google-genai (Gemini) — PDF 상위 5건 기사 요약
 - paramiko (SSH/SFTP) — 원격 서버 배포
 
 ## 로컬 실행
@@ -122,6 +131,7 @@ theme.py            공통 CSS(오렌지 테마) 및 재사용 컴포넌트
 data.py             (레거시, 미사용) 과거 샘플 데이터 — 현재 어떤 화면도 참조하지 않음
 news_feed.py        mentions 원본 → 화면 표시용 가공 (카테고리 분류·점수·메달·이슈·브리핑, 채널 표시 필터)
 policy_feed.py      policy_events 원본 → 화면 표시용 가공 (정책 카테고리 분류·점수·메달·발표 추이)
+summarizer.py       PDF 상위 5건 전용 Gemini 기사 요약 (원문 있는 기사만, 결과는 DB에 캐싱)
 access_control.py    IP 화이트리스트 · 관리자 판별
 db.py               수집 데이터 SQLite 저장소
 report_pdf.py        PDF 보고서 카드덱 HTML 템플릿 + Playwright PDF 생성 (미리보기와 공유)

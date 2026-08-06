@@ -5,4 +5,5 @@ requests
 beautifulsoup4
 pandas
 playwright
+google-genai
 pytest>=8.0.0

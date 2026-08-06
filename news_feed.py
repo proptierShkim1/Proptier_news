@@ -12,7 +12,8 @@ RECENT_LIMIT = 200
 BROAD_LIMIT = 1000
 DISPLAY_LIMIT = 30
 RECENCY_HOURS = 12
-CONTENT_PREVIEW_LEN = 480
+CONTENT_PREVIEW_LEN = 300
+PDF_CONTENT_PREVIEW_LEN = 580
 
 CATEGORY_KEYWORDS = {
     "신규 도입": ["출시", "도입", "런칭", "오픈", "신규", "베타", "공개"],
@@ -131,14 +132,19 @@ def build_news_items(mentions: list[dict], own_brands: set, now: datetime | None
         collected = _parse_collected_at(m.get("collected_at", ""))
 
         content = (m.get("content") or "").strip()
+        summary = (m.get("summary") or "").strip()
         snippet = (m.get("snippet") or "").strip()
         title = (m.get("title") or "").strip()
         if content:
-            desc = [_truncate(content, CONTENT_PREVIEW_LEN)]
+            source_text = content
         elif snippet and snippet != title:
-            desc = [snippet]
+            source_text = snippet
         else:
-            desc = [f"{m.get('channel', '')} 채널에서 수집된 기사입니다 · 원문 링크에서 전체 내용을 확인하세요."]
+            source_text = f"{m.get('channel', '')} 채널에서 수집된 기사입니다 · 원문 링크에서 전체 내용을 확인하세요."
+        desc = [_truncate(source_text, CONTENT_PREVIEW_LEN)]
+        # PDF 보고서 전용: AI 요약(summary)이 있으면 그걸 우선 쓰고, 없으면 원문을 좀 더
+        # 길게 발췌한다 — 오늘의 뉴스/뉴스 검색의 desc(위)는 건드리지 않는다.
+        desc_long = [summary] if summary else [_truncate(source_text, PDF_CONTENT_PREVIEW_LEN)]
 
         real_categories = [c for c in categories if c != FALLBACK_CATEGORY]
         cat_line = (
@@ -162,6 +168,10 @@ def build_news_items(mentions: list[dict], own_brands: set, now: datetime | None
             "categories": categories,
             "signal": _signal_label(categories),
             "desc": desc,
+            "desc_long": desc_long,
+            "mention_id": m.get("id"),
+            "content": content,
+            "summary": summary,
             "decision": [f"{cat_line} {recency_line}"],
             "meta": f"🕒 {m.get('posted_at') or (m.get('collected_at', '') or '')[:16]} · {m.get('channel', '')}",
             "_collected": collected,

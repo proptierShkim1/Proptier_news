@@ -53,7 +53,7 @@ DECK_CSS = """
   letter-spacing:-1px; flex:0 0 auto; max-height:160px; overflow:hidden; }
 .repcard .rule { width:70px; height:5px; background:#FF8900; border-radius:3px; margin:18px 0 24px; flex:0 0 auto; }
 .repcard .gist { display:flex; gap:14px; font-size:22px; line-height:1.55; color:#3a3a3d; flex:1 1 auto;
-  min-height:0; max-height:360px; overflow:hidden; }
+  min-height:0; max-height:430px; overflow:hidden; }
 .repcard .gist .ck { width:30px; height:30px; border-radius:50%; background:#FF8900; color:#fff;
   display:flex; align-items:center; justify-content:center; font-size:17px; flex:0 0 auto; margin-top:4px; }
 .repcard .metagrid { flex:0 0 auto; display:flex; flex-wrap:wrap; gap:10px; margin:14px 0 0; }
@@ -62,7 +62,7 @@ DECK_CSS = """
 .repcard .metatile .mt-label { font-size:13px; color:#98a3a8; font-weight:700; }
 .repcard .metatile .mt-value { font-size:16px; color:#202224; font-weight:800; }
 .repcard .why { background:#fff8f0; border:1px solid #f5ddb8; border-radius:18px; padding:20px 24px;
-  display:flex; gap:14px; flex:0 0 auto; margin-top:14px; }
+  display:flex; gap:14px; flex:0 0 auto; margin-top:32px; }
 .repcard .why .bulb { font-size:22px; }
 .repcard .why p { font-size:19px; line-height:1.5; color:#5c4a2e; margin:0; }
 .repcard .foot { display:flex; justify-content:space-between; align-items:center; margin-top:18px;
@@ -118,6 +118,7 @@ def _card_html(rank, item, total_pages):
     meta_parts = item["meta"].split("·")
     channel = meta_parts[1].strip() if len(meta_parts) > 1 else "-"
     categories = [c for c in item.get("categories", []) if c] or ["일반"]
+    gist_text = (item.get("desc_long") or item["desc"])[0]
     return f"""
     <div class="page">
       <div class="repcard">
@@ -130,7 +131,7 @@ def _card_html(rank, item, total_pages):
         </div>
         <h2>{item['title']}</h2>
         <div class="rule"></div>
-        <div class="gist"><span class="ck">✓</span><span>{item['desc'][0]}</span></div>
+        <div class="gist"><span class="ck">✓</span><span>{gist_text}</span></div>
         <div class="metagrid">
           <div class="metatile"><div class="mt-label">브랜드</div><div class="mt-value">{item.get('firm') or '-'}</div></div>
           <div class="metatile"><div class="mt-label">채널</div><div class="mt-value">{channel}</div></div>

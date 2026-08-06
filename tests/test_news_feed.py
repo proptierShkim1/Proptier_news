@@ -3,10 +3,11 @@ from datetime import datetime
 import news_feed
 
 
-def _mention(title, brand="직방", url="https://x/1", collected_at="2026-08-05 09:00:00", snippet="", content=""):
+def _mention(title, brand="직방", url="https://x/1", collected_at="2026-08-05 09:00:00", snippet="",
+              content="", summary="", mention_id=1):
     return {
-        "title": title, "brand": brand, "url": url, "collected_at": collected_at,
-        "snippet": snippet, "content": content, "channel": "네이버", "posted_at": "",
+        "id": mention_id, "title": title, "brand": brand, "url": url, "collected_at": collected_at,
+        "snippet": snippet, "content": content, "summary": summary, "channel": "네이버", "posted_at": "",
     }
 
 
@@ -39,8 +40,37 @@ def test_build_news_items_prefers_full_content_over_snippet_when_available():
     assert "짧은 미리보기" not in items[0]["desc"][0]
 
 
+def test_build_news_items_desc_long_uses_ai_summary_when_present():
+    mentions = [_mention(
+        "직방 AI 매물 추천 출시", content="원문입니다. " * 50, summary="AI가 생성한 짧은 요약입니다.",
+    )]
+
+    items = news_feed.build_news_items(mentions, own_brands=set())
+
+    assert items[0]["desc_long"] == ["AI가 생성한 짧은 요약입니다."]
+
+
+def test_build_news_items_desc_long_falls_back_to_truncated_content_without_summary():
+    mentions = [_mention("직방 AI 매물 추천 출시", content="원문입니다. " * 50, summary="")]
+
+    items = news_feed.build_news_items(mentions, own_brands=set())
+
+    assert items[0]["desc_long"][0] != items[0]["desc"][0] or len(items[0]["desc_long"][0]) >= len(items[0]["desc"][0])
+    assert items[0]["desc_long"][0].startswith("원문입니다.")
+
+
+def test_build_news_items_exposes_mention_id_content_and_summary_for_pdf_backfill():
+    mentions = [_mention("제목", content="원문", summary="요약", mention_id=42)]
+
+    items = news_feed.build_news_items(mentions, own_brands=set())
+
+    assert items[0]["mention_id"] == 42
+    assert items[0]["content"] == "원문"
+    assert items[0]["summary"] == "요약"
+
+
 def test_build_news_items_truncates_long_content_to_preview_length():
-    mentions = [_mention("직방 AI 매물 추천 출시", content="가" * 500)]
+    mentions = [_mention("직방 AI 매물 추천 출시", content="가" * (news_feed.CONTENT_PREVIEW_LEN + 100))]
 
     items = news_feed.build_news_items(mentions, own_brands=set())
 
