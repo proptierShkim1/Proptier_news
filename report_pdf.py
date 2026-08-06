@@ -61,6 +61,9 @@ DECK_CSS = """
   padding:8px 14px; display:flex; align-items:baseline; gap:8px; }
 .repcard .metatile .mt-label { font-size:13px; color:#98a3a8; font-weight:700; }
 .repcard .metatile .mt-value { font-size:16px; color:#202224; font-weight:800; }
+.repcard .metalink { flex:0 0 auto; background:#FF8900; color:#fff; border-radius:10px;
+  padding:8px 16px; font-size:14px; font-weight:800; text-decoration:none; display:flex;
+  align-items:center; gap:4px; margin-left:auto; }
 .repcard .why { background:#fff8f0; border:1px solid #f5ddb8; border-radius:18px; padding:20px 24px;
   display:flex; gap:14px; flex:0 0 auto; margin-top:32px; }
 .repcard .why .bulb { font-size:22px; }
@@ -136,6 +139,7 @@ def _card_html(rank, item, total_pages):
           <div class="metatile"><div class="mt-label">브랜드</div><div class="mt-value">{item.get('firm') or '-'}</div></div>
           <div class="metatile"><div class="mt-label">채널</div><div class="mt-value">{channel}</div></div>
           <div class="metatile"><div class="mt-label">카테고리</div><div class="mt-value">{', '.join(categories)}</div></div>
+          <a class="metalink" href="{item['url']}" target="_blank">바로가기 ↗</a>
         </div>
         <div class="why"><span class="bulb">\U0001F4A1</span><p>{item['decision'][0]}</p></div>
         <div class="foot"><span>부동산AI뉴스봇</span><div class="dots">{_dots_html(total_pages, rank)}</div></div>

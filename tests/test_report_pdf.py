@@ -35,3 +35,14 @@ def test_card_falls_back_to_dash_when_categories_empty():
     html = report_pdf.build_deck_html(items)
 
     assert "일반" in html
+
+
+def test_card_shows_shortcut_link_to_article_url():
+    items = [_item("제목")]
+    items[0]["url"] = "https://example.com/article/123"
+
+    html = report_pdf.build_deck_html(items)
+
+    assert 'class="metalink"' in html
+    assert 'href="https://example.com/article/123"' in html
+    assert "바로가기" in html
