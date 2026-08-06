@@ -1,42 +1,37 @@
 import report_pdf
 
 
-def _item(title, rank=1):
+def _item(title, firm="직방", channel="네이버", categories=None):
     return {
-        "title": title, "url": "https://x/1", "firm": "직방", "date": "2026-08-05",
-        "categories": ["AI"], "signal": "🤖 AI", "desc": ["요약"], "decision": ["이유"],
-        "meta": "🕒 2026-08-05 09:00 · 네이버",
+        "title": title, "url": "https://x/1", "firm": firm, "date": "2026-08-05",
+        "categories": ["AI"] if categories is None else categories,
+        "signal": "🤖 AI", "desc": ["요약"], "decision": ["이유"],
+        "meta": f"🕒 2026-08-05 09:00 · {channel}",
     }
 
 
-def test_summary_page_count_is_zero_for_no_items():
-    assert report_pdf.summary_page_count(0) == 0
-
-
-def test_summary_page_count_rounds_up_to_a_full_page():
-    assert report_pdf.summary_page_count(report_pdf.SUMMARY_PAGE_SIZE + 1) == 2
-
-
-def test_summary_page_count_exact_multiple_of_page_size():
-    assert report_pdf.summary_page_count(report_pdf.SUMMARY_PAGE_SIZE * 3) == 3
-
-
-def test_build_deck_html_without_summary_items_has_only_cover_and_detail_pages():
+def test_build_deck_html_has_one_page_per_item_plus_cover():
     items = [_item(f"제목{i}") for i in range(3)]
 
     html = report_pdf.build_deck_html(items)
 
     assert html.count('<div class="page') == 1 + len(items)
-    assert 'class="repsummary"' not in html
 
 
-def test_build_deck_html_appends_summary_pages_covering_the_rest():
-    items = [_item(f"제목{i}") for i in range(3)]
-    summary_items = [_item(f"요약{i}") for i in range(report_pdf.SUMMARY_PAGE_SIZE + 2)]
+def test_card_shows_brand_channel_and_categories_in_metagrid():
+    items = [_item("제목", firm="직방", channel="구글", categories=["AI", "매물"])]
 
-    html = report_pdf.build_deck_html(items, summary_items=summary_items)
+    html = report_pdf.build_deck_html(items)
 
-    expected_summary_pages = report_pdf.summary_page_count(len(summary_items))
-    assert html.count('<div class="page') == 1 + len(items) + expected_summary_pages
-    assert html.count('class="repsummary"') == expected_summary_pages
-    assert "요약0" in html and f"요약{len(summary_items) - 1}" in html
+    assert 'class="metagrid"' in html
+    assert "직방" in html
+    assert "구글" in html
+    assert "AI, 매물" in html
+
+
+def test_card_falls_back_to_dash_when_categories_empty():
+    items = [_item("제목", categories=[])]
+
+    html = report_pdf.build_deck_html(items)
+
+    assert "일반" in html
