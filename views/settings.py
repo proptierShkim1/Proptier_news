@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 import cached_db
 import collector
 import db
+import vectorizer
 from access_control import load_config, save_config, name_for_ip
 from utils import (
     ALL_MENTION_CHANNELS,
@@ -437,6 +438,7 @@ def _render_brand_collection_tab():
         if st.button("🔄 지금 수집", type="primary", key="collect_now"):
             started_run_id = collector.start_background_collection(trigger="수동")
             if started_run_id:
+                db.log_activity(st.session_state.get("_client_ip", ""), "설정 · 데이터 수집", "신규 게시물 수집 실행")
                 st.session_state["watched_collection_run_id"] = started_run_id
                 st.rerun()
             else:
@@ -560,6 +562,7 @@ def _render_naver_news_collection_tab():
         if st.button("🔄 지금 수집", type="primary", key="naver_news_collect_now"):
             started_run_id = collector.start_background_naver_news_collection(trigger="수동")
             if started_run_id:
+                db.log_activity(st.session_state.get("_client_ip", ""), "설정 · 데이터 수집", "네이버뉴스 API 수집 실행")
                 st.session_state["watched_naver_news_run_id"] = started_run_id
                 st.rerun()
             else:
@@ -624,6 +627,7 @@ def _render_policy_collection_tab():
         if st.button("🔄 7곳 전체 지금 수집", key="policy_collect_all_now", type="primary"):
             started_run_id = collector.start_background_policy_collection(days=30)
             if started_run_id:
+                db.log_activity(st.session_state.get("_client_ip", ""), "설정 · 데이터 수집", "정책 전체 수집 실행")
                 st.session_state["watched_policy_run_id"] = started_run_id
                 st.rerun()
             else:
@@ -852,6 +856,9 @@ def _render_brand_lookup_tab():
     if del_col.button("🗑 선택 삭제", key="lookup_delete_button", disabled=not selected_ids):
         deleted = db.delete_mentions(selected_ids)
         cached_db.clear()
+        db.log_activity(
+            st.session_state.get("_client_ip", ""), "설정 · 데이터 관리", "뉴스 선택 삭제", f"{deleted}건",
+        )
         st.success(f"{deleted:,}건 삭제했습니다.")
         st.rerun()
     count_col.caption(f"선택된 항목: {len(selected_ids):,}건")
@@ -863,6 +870,9 @@ def _render_brand_lookup_tab():
     if st.button("🗑️ 전체 삭제", key="lookup_delete_all_button", disabled=not delete_all_confirm):
         deleted = db.delete_all_mentions()
         cached_db.clear()
+        db.log_activity(
+            st.session_state.get("_client_ip", ""), "설정 · 데이터 관리", "뉴스 전체 삭제", f"{deleted}건",
+        )
         st.success(f"전체 {deleted:,}건을 삭제했습니다.")
         st.rerun()
 
@@ -974,6 +984,9 @@ def _render_policy_lookup_tab():
     if del_col.button("🗑 선택 삭제", key="policy_lookup_delete_button", disabled=not selected_ids):
         deleted = db.delete_policy_events(selected_ids)
         cached_db.clear()
+        db.log_activity(
+            st.session_state.get("_client_ip", ""), "설정 · 데이터 관리", "정책 선택 삭제", f"{deleted}건",
+        )
         st.success(f"{deleted:,}건 삭제했습니다.")
         st.rerun()
     count_col.caption(f"선택된 항목: {len(selected_ids):,}건")
@@ -987,6 +1000,9 @@ def _render_policy_lookup_tab():
     ):
         deleted = db.delete_all_policy_events()
         cached_db.clear()
+        db.log_activity(
+            st.session_state.get("_client_ip", ""), "설정 · 데이터 관리", "정책 전체 삭제", f"{deleted}건",
+        )
         st.success(f"전체 {deleted:,}건을 삭제했습니다.")
         st.rerun()
 
@@ -1024,13 +1040,117 @@ def _render_data_management():
         _render_policy_lookup_tab()
 
 
+# ── 벡터 데이터 ────────────────────────────────────────────────────────────
+
+def _show_vectorize_progress(run_id):
+    logs = [l for l in db.get_vector_run_logs(limit=50) if l["run_id"] == run_id]
+    if logs:
+        lines = [f"{e['source']}: 대상 {e['fetched']}건 · 성공 {e['inserted']}건 · 실패 {e['skipped']}건" for e in logs]
+        st.code("\n".join(lines), language=None, height=100)
+    if vectorizer.active_vectorize_run_id() == run_id:
+        st.caption("🔄 벡터화 진행 중...")
+    else:
+        st.success("벡터화 완료")
+
+
+def _render_vector_data_tab():
+    st.caption(
+        "수집된 뉴스(mentions)·정책(policy_events) 텍스트를 Gemini 임베딩으로 벡터화해 DB에 "
+        "저장합니다. 벡터 자체를 이용한 검색(AI AGENT 연동)은 추후 추가될 예정이고, 여기서는 "
+        "벡터를 만들어 두는 것까지 다룹니다."
+    )
+    if not vectorizer.has_api_keys():
+        st.warning("⚠️ .env에 GEMINI_API_KEYS가 설정되어 있지 않아 벡터화를 실행할 수 없습니다.")
+
+    mentions_pending = db.count_mentions_without_embedding()
+    policy_pending = db.count_policy_events_without_embedding()
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("뉴스 벡터화 대기", f"{mentions_pending:,}건", f"전체 {db.count_mentions():,}건 중")
+    with c2:
+        st.metric("정책 벡터화 대기", f"{policy_pending:,}건", f"전체 {db.count_policy_events():,}건 중")
+
+    st.divider()
+    running_run_id = vectorizer.active_vectorize_run_id()
+    if running_run_id is None:
+        if st.button("🧬 벡터화 진행", type="primary", key="vectorize_now", disabled=not vectorizer.has_api_keys()):
+            started_run_id = vectorizer.start_background_vectorize(trigger="수동")
+            if started_run_id:
+                db.log_activity(
+                    st.session_state.get("_client_ip", ""), "설정 · 벡터 데이터", "벡터화 실행", started_run_id,
+                )
+                st.session_state["watched_vectorize_run_id"] = started_run_id
+                st.rerun()
+            else:
+                st.warning("이미 다른 벡터화가 진행 중입니다.")
+    else:
+        st.info("🔄 벡터화가 진행 중입니다. 페이지를 벗어나거나 새로고침해도 계속 진행됩니다.")
+        st.session_state["watched_vectorize_run_id"] = running_run_id
+
+    display_run_id = running_run_id or st.session_state.get("watched_vectorize_run_id")
+    if display_run_id:
+        _show_vectorize_progress(display_run_id)
+
+    st.divider()
+    st.subheader("📜 벡터화 이력")
+    vector_batches = db.get_vector_run_logs(limit=50)
+    if vector_batches:
+        vector_df = pd.DataFrame(vector_batches)[
+            ["ran_at", "trigger", "source", "fetched", "inserted", "skipped", "ok", "message"]
+        ]
+        st.dataframe(vector_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("아직 벡터화 이력이 없습니다.")
+
+
+# ── 로그 ──────────────────────────────────────────────────────────────────
+
+_ACTIVITY_LOG_FETCH_LIMIT = 5000
+
+
+def _render_activity_log_tab():
+    st.caption("전체 화면에서 발생한 접속 IP·행위 기록입니다 — 페이지 방문/검색/AI 채팅/PDF 생성/관리 작업.")
+
+    col_ip, col_search, col_size = st.columns([1, 2, 1])
+    with col_ip:
+        ips = db.distinct_activity_ips()
+        picked_ip = st.selectbox("IP 필터", ["전체"] + ips, key="activity_log_ip_filter")
+    with col_search:
+        search_text = st.text_input(
+            "검색어 (페이지/행위/내용)", key="activity_log_search", placeholder="예: PDF, 검색어, IP 등",
+        )
+    with col_size:
+        page_size = st.selectbox("표시 개수", _PAGE_SIZE_OPTIONS, key="activity_log_page_size")
+
+    logs = db.get_activity_log(
+        limit=_ACTIVITY_LOG_FETCH_LIMIT, ip="" if picked_ip == "전체" else picked_ip,
+    )
+    if search_text:
+        needle = search_text.lower()
+        logs = [
+            l for l in logs
+            if needle in f"{l['page']} {l['action']} {l['detail']} {l['ip']}".lower()
+        ]
+    st.caption(f"총 {db.count_activity_log():,}건 중 조건에 맞는 {len(logs):,}건")
+
+    if not logs:
+        st.caption("조건에 맞는 로그가 없습니다.")
+        return
+
+    log_df = pd.DataFrame(logs)[["ts", "ip", "page", "action", "detail"]]
+    filter_sig = (picked_ip, search_text, page_size)
+    page_df, page, total_pages = _paginate_df(log_df, filter_sig, page_size, "activity_log")
+    st.dataframe(page_df, use_container_width=True, hide_index=True, height=min(560, 60 + 35 * len(page_df)))
+    _render_pagination_controls("activity_log", page, total_pages)
+
+
 # ── 메인 진입점 ────────────────────────────────────────────────────────────
 
 def render():
     st.title("⚙️ 설정")
 
-    tab_access, tab_collect, tab_manage, tab_deploy = _persistent_tabs(
-        ["🔐 접근 제어", "🔄 데이터 수집", "🗃 데이터 관리", "🚀 배포"], "main_tab"
+    tab_access, tab_collect, tab_manage, tab_vector, tab_log, tab_deploy = _persistent_tabs(
+        ["🔐 접근 제어", "🔄 데이터 수집", "🗃 데이터 관리", "🧬 벡터 데이터", "📋 로그", "🚀 배포"], "main_tab"
     )
     with tab_access:
         _render_access_control()
@@ -1038,5 +1158,9 @@ def render():
         _render_data_collection()
     with tab_manage:
         _render_data_management()
+    with tab_vector:
+        _render_vector_data_tab()
+    with tab_log:
+        _render_activity_log_tab()
     with tab_deploy:
         _render_deploy()

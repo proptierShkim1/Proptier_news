@@ -56,4 +56,7 @@ if _is_admin:
     pages.append(st.Page(settings.render, title="설정", icon="\U00002699", url_path="settings"))
 
 nav = st.navigation(pages, position="top")
+if st.session_state.get("_last_logged_page") != nav.title:
+    db.log_activity(_client_ip, nav.title, "페이지 방문")
+    st.session_state["_last_logged_page"] = nav.title
 nav.run()

@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import streamlit as st
 
 import cached_db
+import db
 import news_feed
 import theme
 
@@ -28,6 +29,10 @@ def render():
     with c3:
         sort = st.selectbox("↕️ 정렬", ["최신순", "점수순"])
     st.markdown('</div>', unsafe_allow_html=True)
+
+    if query and st.session_state.get("_last_logged_search") != query:
+        db.log_activity(st.session_state.get("_client_ip", ""), "뉴스 검색", "검색", query)
+        st.session_state["_last_logged_search"] = query
 
     period = period or "전체"
     mentions = cached_db.get_mentions(

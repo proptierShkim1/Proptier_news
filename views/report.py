@@ -1,6 +1,7 @@
 import streamlit as st
 
 import cached_db
+import db
 import news_feed
 import summarizer
 import theme
@@ -38,6 +39,7 @@ def render():
     col_dl, col_note = st.columns([1, 3])
     with col_dl:
         if st.button("\U0001F4E5 PDF 생성", type="primary", use_container_width=True):
+            db.log_activity(st.session_state.get("_client_ip", ""), "PDF 보고서", "PDF 생성")
             with st.spinner("PDF 생성 중... (Chromium 렌더링, 수 초 소요)"):
                 try:
                     st.session_state["report_pdf_bytes"] = generate_pdf_bytes(top5, total_count, ai_count)

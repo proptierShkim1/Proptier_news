@@ -77,6 +77,32 @@ CREATE TABLE IF NOT EXISTS policy_run_logs (
 );
 """
 
+_VECTOR_RUN_LOGS_SQL = """
+CREATE TABLE IF NOT EXISTS vector_run_logs (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    ran_at    TEXT NOT NULL,
+    trigger   TEXT NOT NULL DEFAULT '수동',
+    source    TEXT NOT NULL,
+    fetched   INTEGER DEFAULT 0,
+    inserted  INTEGER DEFAULT 0,
+    skipped   INTEGER DEFAULT 0,
+    ok        INTEGER DEFAULT 1,
+    message   TEXT DEFAULT '',
+    run_id    TEXT NOT NULL DEFAULT ''
+);
+"""
+
+_ACTIVITY_LOG_SQL = """
+CREATE TABLE IF NOT EXISTS activity_log (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts      TEXT NOT NULL,
+    ip      TEXT NOT NULL,
+    page    TEXT NOT NULL,
+    action  TEXT NOT NULL,
+    detail  TEXT NOT NULL DEFAULT ''
+);
+"""
+
 
 def _ensure_column(con: sqlite3.Connection, table: str, column: str, definition: str) -> None:
     """table에 column이 없으면 ALTER TABLE로 추가한다 — 스키마에 새 컬럼을 추가했을 때
@@ -99,7 +125,11 @@ def init_db() -> None:
         con.execute(_RUN_LOGS_SQL)
         con.execute(_POLICY_EVENTS_SQL)
         con.execute(_POLICY_RUN_LOGS_SQL)
+        con.execute(_VECTOR_RUN_LOGS_SQL)
+        con.execute(_ACTIVITY_LOG_SQL)
         _ensure_column(con, "mentions", "summary", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(con, "mentions", "embedding", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(con, "policy_events", "embedding", "TEXT NOT NULL DEFAULT ''")
         con.execute("CREATE INDEX IF NOT EXISTS idx_mentions_collected_at ON mentions(collected_at)")
 
 
@@ -381,3 +411,118 @@ def get_policy_run_batches(limit: int = 50) -> list[dict]:
 
     batches.sort(key=lambda b: b["ran_at"], reverse=True)
     return batches[:limit]
+
+
+def update_mention_embedding(mention_id: int, embedding_json: str) -> None:
+    init_db()
+    with _connect() as con:
+        con.execute(
+            "UPDATE mentions SET embedding = :embedding WHERE id = :id",
+            {"embedding": embedding_json, "id": mention_id},
+        )
+
+
+def update_policy_event_embedding(event_id: int, embedding_json: str) -> None:
+    init_db()
+    with _connect() as con:
+        con.execute(
+            "UPDATE policy_events SET embedding = :embedding WHERE id = :id",
+            {"embedding": embedding_json, "id": event_id},
+        )
+
+
+def get_mentions_without_embedding(limit: int = 200) -> list[dict]:
+    init_db()
+    with _connect() as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT id, title, content, snippet FROM mentions WHERE embedding = '' "
+            "ORDER BY id DESC LIMIT :limit", {"limit": limit},
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_policy_events_without_embedding(limit: int = 200) -> list[dict]:
+    init_db()
+    with _connect() as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT id, title, department FROM policy_events WHERE embedding = '' "
+            "ORDER BY id DESC LIMIT :limit", {"limit": limit},
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def count_mentions_without_embedding() -> int:
+    init_db()
+    with _connect() as con:
+        return con.execute("SELECT COUNT(*) FROM mentions WHERE embedding = ''").fetchone()[0]
+
+
+def count_policy_events_without_embedding() -> int:
+    init_db()
+    with _connect() as con:
+        return con.execute("SELECT COUNT(*) FROM policy_events WHERE embedding = ''").fetchone()[0]
+
+
+def insert_vector_run_log(entry: dict) -> None:
+    init_db()
+    entry = {**entry, "run_id": entry.get("run_id", "")}
+    with _connect() as con:
+        con.execute(
+            "INSERT INTO vector_run_logs "
+            "(ran_at, trigger, source, fetched, inserted, skipped, ok, message, run_id) "
+            "VALUES (:ran_at, :trigger, :source, :fetched, :inserted, :skipped, :ok, :message, :run_id)",
+            entry,
+        )
+
+
+def get_vector_run_logs(limit: int = 50) -> list[dict]:
+    init_db()
+    with _connect() as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT * FROM vector_run_logs ORDER BY ran_at DESC LIMIT :limit", {"limit": limit},
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def log_activity(ip: str, page: str, action: str, detail: str = "") -> None:
+    """접속 IP·페이지·행위를 activity_log에 남긴다 — 관리자 설정 화면의 '로그' 탭에서
+    누가(IP) 언제 무엇을(페이지 방문/검색/PDF 생성/AI 채팅/관리 작업 등) 했는지 조회하는 데 쓴다."""
+    init_db()
+    with _connect() as con:
+        con.execute(
+            "INSERT INTO activity_log (ts, ip, page, action, detail) "
+            "VALUES (:ts, :ip, :page, :action, :detail)",
+            {
+                "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "ip": ip, "page": page, "action": action, "detail": detail,
+            },
+        )
+
+
+def get_activity_log(limit: int = 500, ip: str = "") -> list[dict]:
+    init_db()
+    query = "SELECT * FROM activity_log WHERE 1=1"
+    params = {"limit": limit}
+    if ip:
+        query += " AND ip = :ip"
+        params["ip"] = ip
+    query += " ORDER BY id DESC LIMIT :limit"
+    with _connect() as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+
+def count_activity_log() -> int:
+    init_db()
+    with _connect() as con:
+        return con.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0]
+
+
+def distinct_activity_ips() -> list[str]:
+    init_db()
+    with _connect() as con:
+        return [row[0] for row in con.execute("SELECT DISTINCT ip FROM activity_log ORDER BY ip")]

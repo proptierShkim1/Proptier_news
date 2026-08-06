@@ -3,6 +3,7 @@ from datetime import datetime
 import streamlit as st
 
 import agent_chat
+import db
 import theme
 import utils
 
@@ -64,6 +65,7 @@ def render():
     if is_current:
         user_input = st.chat_input("예: 직방의 최근 1달간 동향 알려줘")
         if user_input:
+            db.log_activity(client_ip, "AI AGENT", "채팅 전송", user_input[:200])
             history = viewed["messages"]
             with st.chat_message("user"):
                 st.markdown(user_input)

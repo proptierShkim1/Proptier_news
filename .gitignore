@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 streamlit.log
 streamlit_err.log
+streamlit_out.log
 .claude/
 data/access_config.json
 data/news.db

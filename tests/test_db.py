@@ -307,3 +307,102 @@ def test_get_run_batches_channels_filter_splits_mixed_channel_batch(tmp_path, mo
     assert naver_news_batches[0]["combinations"] == 1
     assert naver_news_batches[0]["fetched"] == 3
     assert naver_news_batches[0]["inserted"] == 2
+
+
+def test_mentions_default_to_empty_embedding(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1"))
+
+    assert db.count_mentions_without_embedding() == 1
+    assert db.get_mentions_without_embedding()[0]["title"] == "제목"
+
+
+def test_update_mention_embedding_removes_it_from_pending(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1"))
+    mention_id = db.get_mentions()[0]["id"]
+
+    db.update_mention_embedding(mention_id, "[0.1, 0.2]")
+
+    assert db.count_mentions_without_embedding() == 0
+    assert db.get_mentions()[0]["embedding"] == "[0.1, 0.2]"
+
+
+def test_policy_events_default_to_empty_embedding(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_policy_event({
+        "source": "국토부", "title": "제목", "url": "https://p/1", "department": "",
+        "announced_at": "2026-08-01", "view_count": 0, "collected_at": "2026-08-01 09:00:00",
+    })
+
+    assert db.count_policy_events_without_embedding() == 1
+    assert db.get_policy_events_without_embedding()[0]["title"] == "제목"
+
+
+def test_update_policy_event_embedding_removes_it_from_pending(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_policy_event({
+        "source": "국토부", "title": "제목", "url": "https://p/1", "department": "",
+        "announced_at": "2026-08-01", "view_count": 0, "collected_at": "2026-08-01 09:00:00",
+    })
+    event_id = db.get_policy_events()[0]["id"]
+
+    db.update_policy_event_embedding(event_id, "[0.3, 0.4]")
+
+    assert db.count_policy_events_without_embedding() == 0
+    assert db.get_policy_events()[0]["embedding"] == "[0.3, 0.4]"
+
+
+def test_insert_vector_run_log_and_get_vector_run_logs_orders_most_recent_first(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_vector_run_log({
+        "ran_at": "2026-08-06 09:00:00", "trigger": "수동", "source": "mentions",
+        "fetched": 5, "inserted": 5, "skipped": 0, "ok": 1, "message": "", "run_id": "r1",
+    })
+    db.insert_vector_run_log({
+        "ran_at": "2026-08-06 10:00:00", "trigger": "수동", "source": "policy_events",
+        "fetched": 3, "inserted": 3, "skipped": 0, "ok": 1, "message": "", "run_id": "r1",
+    })
+
+    logs = db.get_vector_run_logs()
+
+    assert [l["source"] for l in logs] == ["policy_events", "mentions"]
+
+
+def test_log_activity_and_get_activity_log_orders_most_recent_first(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.log_activity("1.1.1.1", "오늘의 뉴스", "페이지 방문")
+    db.log_activity("2.2.2.2", "뉴스 검색", "검색", "직방")
+
+    logs = db.get_activity_log()
+
+    assert [l["ip"] for l in logs] == ["2.2.2.2", "1.1.1.1"]
+    assert logs[0]["detail"] == "직방"
+
+
+def test_get_activity_log_filters_by_ip(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.log_activity("1.1.1.1", "오늘의 뉴스", "페이지 방문")
+    db.log_activity("2.2.2.2", "뉴스 검색", "검색", "직방")
+
+    logs = db.get_activity_log(ip="1.1.1.1")
+
+    assert len(logs) == 1
+    assert logs[0]["ip"] == "1.1.1.1"
+
+
+def test_count_activity_log_counts_all_ips(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.log_activity("1.1.1.1", "오늘의 뉴스", "페이지 방문")
+    db.log_activity("2.2.2.2", "뉴스 검색", "검색", "직방")
+
+    assert db.count_activity_log() == 2
+
+
+def test_distinct_activity_ips_returns_sorted_unique_ips(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.log_activity("2.2.2.2", "뉴스 검색", "검색", "직방")
+    db.log_activity("1.1.1.1", "오늘의 뉴스", "페이지 방문")
+    db.log_activity("1.1.1.1", "브리핑", "페이지 방문")
+
+    assert db.distinct_activity_ips() == ["1.1.1.1", "2.2.2.2"]
