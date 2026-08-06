@@ -13,7 +13,11 @@
 | 🔍 뉴스 검색 | 키워드·기간·부동산사 필터링 검색 |
 | 📄 PDF 보고서 | 표지 + 랭킹 1~5위 카드뉴스 형태(1080×1080, 6페이지) — 실제 다운로드 가능한 PDF 생성 |
 | 🏛️ 정책 뉴스 | 정부 정책 보도자료 전용 화면 — hero/지표, 경영진 브리핑, 발표 추이 차트, 카테고리 탭별 점수 랭킹 |
+| 🤖 AI AGENT | Gemini 기반 자유 대화형 챗봇(`st.chat_input`) — 아직 수집 데이터(벡터 검색) 연동 전, 일반 대화만 지원 |
 | ⚙️ 설정 (관리자 전용) | 접근 제어(IP 화이트리스트) · 데이터 수집 · 데이터 관리 · 서버 배포 |
+
+메뉴 순서: 오늘의 뉴스 → 부동산사 동향 → 브리핑 → 정책 뉴스 → 뉴스 검색 → PDF 보고서 → AI AGENT
+→ (관리자만) 설정.
 
 오늘의 뉴스/부동산사 동향/브리핑/뉴스 검색/PDF 보고서 5개 화면 모두 `data/news.db`(SQLite)의
 실제 수집 데이터(`mentions`)를 조회해서 렌더링한다. 카테고리 분류·점수·메달처럼 원본 데이터에
@@ -94,6 +98,19 @@
   컬럼에 저장되어 같은 기사를 다시 요약하지 않는다 — `views/report.py`의 `_ensure_pdf_summaries()`가
   top5 중 `summary`가 비어있는 항목만 호출한다
 
+## AI AGENT (Gemini 챗봇)
+
+`agent_chat.py` + `views/agent.py` — `st.chat_input`/`st.chat_message` 기반 자유 대화 챗봇.
+summarizer.py와 같은 `.env`의 `GEMINI_API_KEYS`/`GEMINI_MODEL`을 재사용한다. 아직 수집 데이터
+(mentions·policy_events) 벡터 검색 연동은 없고, 일반 LLM 대화만 지원한다(추후 추가 예정).
+
+- **대화 이력은 순수 텍스트로만 세션에 보관하고, 매 메시지마다 새 `genai.Client`/`chats` 세션을
+  만들어 이전 대화를 주입한다.** google-genai의 `chat` 세션 객체를 `st.session_state`에 그대로
+  들고 있다가 재사용하면 내부 HTTP 클라이언트가 닫힌 상태로 남아 "Cannot send a request, as the
+  client has been closed" 오류가 나는 걸 실제로 확인했다 — Streamlit이 재실행마다 다른 스레드에서
+  스크립트를 돌릴 수 있어서인 것으로 보임. 매번 새로 만들면 이 문제가 없고, 여러 키로
+  failover하기도 더 쉽다.
+
 ## 기술 스택
 
 - Streamlit (`st.navigation(position="top")` 기반 멀티페이지, 오렌지 테마 커스텀 CSS)
@@ -132,6 +149,7 @@ data.py             (레거시, 미사용) 과거 샘플 데이터 — 현재 �
 news_feed.py        mentions 원본 → 화면 표시용 가공 (카테고리 분류·점수·메달·이슈·브리핑, 채널 표시 필터)
 policy_feed.py      policy_events 원본 → 화면 표시용 가공 (정책 카테고리 분류·점수·메달·발표 추이)
 summarizer.py       PDF 상위 5건 전용 Gemini 기사 요약 (원문 있는 기사만, 결과는 DB에 캐싱)
+agent_chat.py       AI AGENT 페이지용 범용 Gemini 대화 (매 메시지마다 새 세션에 이력 주입)
 access_control.py    IP 화이트리스트 · 관리자 판별
 db.py               수집 데이터 SQLite 저장소
 report_pdf.py        PDF 보고서 카드덱 HTML 템플릿 + Playwright PDF 생성 (미리보기와 공유)
@@ -139,7 +157,7 @@ collector.py         키워드×채널 수집 조율, 노이즈 필터링, 일�
 scheduler.py         자동 수집 스케줄러(백그라운드 스레드, 3개 독립 파이프라인)
 utils.py             키워드/스케줄/채널 표시 설정 로드·저장, 상대 날짜 변환
 crawlers/            네이버·구글·다음·디시인사이드 스크래퍼 + 네이버뉴스API(공식 API) + 정책 7개 기관
-views/               페이지별 렌더 함수 (news_today, firms, briefings, search, report, policy_news, settings)
+views/               페이지별 렌더 함수 (news_today, firms, briefings, search, report, policy_news, agent, settings)
 data/                런타임 설정·DB (access_config.json, keywords.json, news.db 등 — git 미포함)
 scripts/start_server.sh  원격 서버 기동 스크립트
 ```

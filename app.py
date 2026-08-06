@@ -5,7 +5,7 @@ import db
 from access_control import is_allowed, is_admin
 from report_pdf import DECK_CSS
 from scheduler import start_scheduler_thread
-from views import news_today, firms, briefings, search, report, policy_news, settings
+from views import agent, news_today, firms, briefings, search, report, policy_news, settings
 
 st.set_page_config(page_title="부동산 AI 주요뉴스", page_icon="\U0001F3E0", layout="wide")
 theme.inject()
@@ -47,9 +47,10 @@ pages = [
     st.Page(news_today.render, title="오늘의 뉴스", icon="\U0001F4F0", url_path="news", default=True),
     st.Page(firms.render, title="부동산사 동향", icon="\U0001F3E2", url_path="firms"),
     st.Page(briefings.render, title="브리핑", icon="\U0001F4DD", url_path="briefings"),
+    st.Page(policy_news.render, title="정책 뉴스", icon="\U0001F3DB", url_path="policy"),
     st.Page(search.render, title="뉴스 검색", icon="\U0001F50D", url_path="search"),
     st.Page(report.render, title="PDF 보고서", icon="\U0001F4C4", url_path="report"),
-    st.Page(policy_news.render, title="정책 뉴스", icon="\U0001F3DB", url_path="policy"),
+    st.Page(agent.render, title="AI AGENT", icon="\U0001F916", url_path="agent"),
 ]
 if _is_admin:
     pages.append(st.Page(settings.render, title="설정", icon="\U00002699", url_path="settings"))

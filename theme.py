@@ -19,6 +19,11 @@ CSS = """
 .block-container {max-width:1120px; padding-top:1.5rem; padding-bottom:3rem;}
 #MainMenu, footer {visibility:hidden;}
 
+/* ----- 채팅 입력창(st.chat_input)이 본문과 같은 폭으로 보이도록 ----- */
+[data-testid="stBottomBlockContainer"], [data-testid="stBottom"] > div {
+  max-width:1120px!important; margin-left:auto!important; margin-right:auto!important;
+}
+
 .hero {position:relative; overflow:hidden; border-radius:24px; padding:36px 38px 34px;
        margin-bottom:16px; color:#fff;
        background:linear-gradient(125deg,#1c1c1e 0%,#4a2a00 48%,#ff8900 100%);
