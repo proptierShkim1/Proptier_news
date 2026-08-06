@@ -10,11 +10,12 @@ _CURRENT_LABEL = "\U0001F7E2 현재 대화"
 
 
 def _session_label(session: dict, idx: int, total: int) -> str:
-    if idx == total - 1:
-        return _CURRENT_LABEL
-    started = session.get("started_at") or "이전 대화"
+    started = session.get("started_at") or ""
     preview = next((t["content"][:20] for t in session.get("messages", []) if t["role"] == "user"), "")
-    return f"{started} · {preview}" if preview else started
+    if idx == total - 1:
+        return f"{_CURRENT_LABEL} · {started}" if started else _CURRENT_LABEL
+    label = started or "이전 대화(날짜 미기록)"
+    return f"{label} · {preview}" if preview else label
 
 
 def render():
@@ -54,6 +55,8 @@ def render():
         st.rerun()
 
     viewed = sessions[picked_idx]
+    if not is_current and viewed.get("started_at"):
+        st.caption(f"\U0001F5D3️ 대화 시작: {viewed['started_at']}")
     for turn in viewed["messages"]:
         with st.chat_message(turn["role"]):
             st.markdown(turn["content"])

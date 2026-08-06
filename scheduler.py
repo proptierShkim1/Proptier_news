@@ -5,10 +5,11 @@ hana_p — 등록된 시각에 맞춰 자동 수집을 실행하는 백그라운
 import logging
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import collector
+import summarizer
 from utils import (
     load_collection_schedule,
     load_naver_news_collection_schedule,
@@ -19,9 +20,12 @@ _POLL_SECONDS = 30
 # 폴링 주기가 아니라 "혹시 한 번 놓쳐도 다음 실행에서 메꿔지도록" 여유를 둔 값 —
 # 정책 게시판은 URL UNIQUE로 어차피 중복 저장되지 않으니 매번 겹치게 가져와도 안전하다.
 _POLICY_COLLECTION_DAYS = 3
+# PDF 상위 항목 AI 요약 미리 생성 주기 — 수집 스케줄과는 무관하게 별도로 돈다.
+_PDF_PRESUMMARY_INTERVAL_MINUTES = 5
 _last_fired = ""
 _last_fired_policy = ""
 _last_fired_naver_news = ""
+_last_pdf_presummary: datetime | None = None
 _lock = threading.Lock()
 _started = False
 
@@ -97,12 +101,35 @@ def _tick_naver_news() -> None:
         logger.exception("스케줄러(네이버뉴스 API) 반복 실행 중 오류 발생")
 
 
+def _tick_pdf_presummary() -> None:
+    """PDF 보고서 상위 5개 항목의 AI 요약을 백그라운드에서 미리 만들어 DB에 저장한다.
+    렌더링 시점(views/report.py)에 처음 요약을 만들면 Gemini 호출을 기다려야 해서 첫
+    페이지 로딩이 느려지므로, 수집 스케줄과 별도로 일정 주기마다 미리 돌려 둔다. 앱
+    시작 직후(첫 tick)에도 바로 한 번 실행된다."""
+    global _last_pdf_presummary
+    try:
+        now = datetime.now()
+        with _lock:
+            due = _last_pdf_presummary is None or (
+                now - _last_pdf_presummary >= timedelta(minutes=_PDF_PRESUMMARY_INTERVAL_MINUTES)
+            )
+        if due:
+            with _lock:
+                _last_pdf_presummary = now
+            updated = summarizer.presummarize_top_pdf_items()
+            if updated:
+                logger.info("PDF 상위 항목 AI 요약 미리 생성: %d건", updated)
+    except Exception:
+        logger.exception("스케줄러(PDF 요약 미리 생성) 반복 실행 중 오류 발생")
+
+
 def _tick() -> None:
     """스케줄러 한 사이클 분량의 로직. 신규 게시물/정부 정책/네이버뉴스 API는 각자
     독립된 스케줄로 체크한다."""
     _tick_new_posts()
     _tick_policy()
     _tick_naver_news()
+    _tick_pdf_presummary()
 
 
 def _loop() -> None:

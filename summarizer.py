@@ -56,3 +56,38 @@ def summarize_article(title: str, content: str) -> str:
         except Exception:
             continue
     return ""
+
+
+def ensure_pdf_summaries(items: list[dict]) -> bool:
+    """PDF에 실제로 노출되는 상위 항목(top5)에 대해서만 AI 요약을 만들어 DB에 저장한다.
+    이미 summary가 있는 항목은 다시 호출하지 않는다. views/report.py의 렌더링 경로와,
+    scheduler.py의 백그라운드 사전 생성 경로 양쪽에서 같은 로직을 쓴다 — 백그라운드에서
+    미리 돌려두면 사용자가 PDF 보고서 페이지를 열 때 Gemini 호출을 기다리지 않는다."""
+    import db
+
+    updated = False
+    for item in items:
+        if item.get("content") and not item.get("summary") and item.get("mention_id"):
+            ai_summary = summarize_article(item["title"], item["content"])
+            if ai_summary:
+                db.update_mention_summary(item["mention_id"], ai_summary)
+                item["summary"] = ai_summary
+                item["desc_long"] = [ai_summary]
+                updated = True
+    return updated
+
+
+def presummarize_top_pdf_items(limit: int = 5) -> int:
+    """수집 스케줄과 무관하게 PDF 상위 항목의 AI 요약을 미리 만들어 둔다 (scheduler.py에서
+    주기적으로 호출). 반환값은 새로 요약한 건수."""
+    import db
+    import news_feed
+
+    mentions = db.get_mentions(limit=news_feed.RECENT_LIMIT, channels=news_feed.enabled_channels())
+    if not mentions:
+        return 0
+    news_items = news_feed.build_news_items(mentions, news_feed.own_brand_names())
+    top_items = news_items[:limit]
+    before = {id(it): it.get("summary") for it in top_items}
+    ensure_pdf_summaries(top_items)
+    return sum(1 for it in top_items if it.get("summary") and it.get("summary") != before.get(id(it)))
