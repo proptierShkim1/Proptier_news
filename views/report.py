@@ -2,6 +2,7 @@ import streamlit as st
 
 import db
 import news_feed
+import report_pdf
 import theme
 from report_pdf import build_deck_html, generate_pdf_bytes
 
@@ -20,15 +21,20 @@ def render():
 
     news_items = news_feed.build_news_items(mentions, news_feed.own_brand_names())
     top5 = news_items[:5]
+    summary_items = news_items[5:news_feed.DISPLAY_LIMIT]
     total_count = db.count_mentions()
     ai_count = sum(1 for it in news_items if "AI" in it["categories"])
+    summary_pages = report_pdf.summary_page_count(len(summary_items))
+    total_pages = 1 + len(top5) + summary_pages
 
     col_dl, col_note = st.columns([1, 3])
     with col_dl:
         if st.button("\U0001F4E5 PDF 생성", type="primary", use_container_width=True):
             with st.spinner("PDF 생성 중... (Chromium 렌더링, 수 초 소요)"):
                 try:
-                    st.session_state["report_pdf_bytes"] = generate_pdf_bytes(top5, total_count, ai_count)
+                    st.session_state["report_pdf_bytes"] = generate_pdf_bytes(
+                        top5, total_count, ai_count, summary_items,
+                    )
                 except Exception as e:
                     st.session_state["report_pdf_bytes"] = None
                     st.error(f"PDF 생성 실패: {e}")
@@ -43,12 +49,14 @@ def render():
 
     st.markdown('<h2 class="sec">미리보기</h2>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="sec-note">표지 1장 + 랭킹 1~5위 카드 — 실제 다운로드되는 PDF와 완전히 동일한 레이아웃입니다.</div>',
+        f'<div class="sec-note">표지 1장 + 랭킹 1~5위 카드 + 요약 목록 {summary_pages}장 '
+        f'(나머지 {len(summary_items):,}건) — 실제 다운로드되는 PDF와 완전히 동일한 레이아웃입니다.</div>',
         unsafe_allow_html=True,
     )
     st.markdown(
-        f'<div style="zoom:0.85; transform-origin: top left;">{build_deck_html(top5, total_count, ai_count)}</div>',
+        f'<div style="zoom:0.85; transform-origin: top left;">'
+        f'{build_deck_html(top5, total_count, ai_count, summary_items)}</div>',
         unsafe_allow_html=True,
     )
 
-    theme.footer("PDF 보고서 · 카드뉴스 6장 구성")
+    theme.footer(f"PDF 보고서 · 카드뉴스 {total_pages}장 구성")

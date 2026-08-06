@@ -120,6 +120,26 @@ def build_news_items(mentions: list[dict], own_brands: set, now: datetime | None
         text = f"{m.get('title', '')} {m.get('snippet', '')}"
         categories = categorize(text)
         collected = _parse_collected_at(m.get("collected_at", ""))
+
+        snippet = (m.get("snippet") or "").strip()
+        title = (m.get("title") or "").strip()
+        if snippet and snippet != title:
+            desc = [snippet]
+        else:
+            desc = [f"{m.get('channel', '')} 채널에서 수집된 기사입니다 · 원문 링크에서 전체 내용을 확인하세요."]
+
+        real_categories = [c for c in categories if c != FALLBACK_CATEGORY]
+        cat_line = (
+            f"{', '.join(real_categories)} 카테고리에 해당하는 기사로 선별되었습니다."
+            if real_categories else
+            "카테고리 키워드와 직접 매칭되지는 않았지만 관련 신호로 수집되었습니다."
+        )
+        recency_line = (
+            f"최근 {RECENCY_HOURS}시간 내 수집되어 신선도가 높습니다."
+            if _is_recent(m, now) else
+            "누적 수집 데이터 중 상위 신호로 선정되었습니다."
+        )
+
         items.append({
             "score": _score(m, categories, own_brands, now),
             "title": m.get("title", ""),
@@ -129,10 +149,8 @@ def build_news_items(mentions: list[dict], own_brands: set, now: datetime | None
             "collected_at": m.get("collected_at", ""),
             "categories": categories,
             "signal": _signal_label(categories),
-            "desc": [m["snippet"]] if m.get("snippet") else ["(요약 없음)"],
-            "decision": [
-                f"“{m.get('brand', '')}” 관련해 {m.get('channel', '')} 채널에서 감지된 신호입니다."
-            ],
+            "desc": desc,
+            "decision": [f"{cat_line} {recency_line}"],
             "meta": f"🕒 {m.get('posted_at') or (m.get('collected_at', '') or '')[:16]} · {m.get('channel', '')}",
             "_collected": collected,
         })
