@@ -1,8 +1,20 @@
+from datetime import datetime
+
 import streamlit as st
 
 import agent_chat
 import theme
 import utils
+
+_CURRENT_LABEL = "\U0001F7E2 현재 대화"
+
+
+def _session_label(session: dict, idx: int, total: int) -> str:
+    if idx == total - 1:
+        return _CURRENT_LABEL
+    started = session.get("started_at") or "이전 대화"
+    preview = next((t["content"][:20] for t in session.get("messages", []) if t["role"] == "user"), "")
+    return f"{started} · {preview}" if preview else started
 
 
 def render():
@@ -19,31 +31,49 @@ def render():
 
     client_ip = st.session_state.get("_client_ip", "")
 
-    if "agent_chat_history" not in st.session_state:
-        st.session_state["agent_chat_history"] = utils.load_agent_chat_history(client_ip)
+    if "agent_chat_sessions" not in st.session_state:
+        sessions = utils.load_agent_chat_sessions(client_ip)
+        if not sessions:
+            sessions = [{"started_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "messages": []}]
+        st.session_state["agent_chat_sessions"] = sessions
 
-    if st.button("\U0001F504 대화 초기화"):
-        st.session_state["agent_chat_history"] = []
-        utils.save_agent_chat_history(client_ip, [])
+    sessions = st.session_state["agent_chat_sessions"]
+
+    picked_idx = len(sessions) - 1
+    if len(sessions) > 1:
+        labels = [_session_label(s, i, len(sessions)) for i, s in enumerate(sessions)]
+        picked_label = st.selectbox("\U0001F5C2️ 지난 대화", labels, index=len(labels) - 1)
+        picked_idx = labels.index(picked_label)
+
+    is_current = picked_idx == len(sessions) - 1
+
+    if is_current and st.button("\U0001F504 새 대화 시작"):
+        if sessions[-1]["messages"]:
+            sessions.append({"started_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "messages": []})
+            utils.save_agent_chat_sessions(client_ip, sessions)
         st.rerun()
 
-    for turn in st.session_state["agent_chat_history"]:
+    viewed = sessions[picked_idx]
+    for turn in viewed["messages"]:
         with st.chat_message(turn["role"]):
             st.markdown(turn["content"])
 
-    user_input = st.chat_input("예: 직방의 최근 1달간 동향 알려줘")
-    if user_input:
-        history = st.session_state["agent_chat_history"]
-        with st.chat_message("user"):
-            st.markdown(user_input)
+    if is_current:
+        user_input = st.chat_input("예: 직방의 최근 1달간 동향 알려줘")
+        if user_input:
+            history = viewed["messages"]
+            with st.chat_message("user"):
+                st.markdown(user_input)
 
-        with st.chat_message("assistant"):
-            with st.spinner("생각 중..."):
-                reply = agent_chat.ask(history, user_input)
-            st.markdown(reply)
+            with st.chat_message("assistant"):
+                with st.spinner("생각 중..."):
+                    reply = agent_chat.ask(history, user_input)
+                st.markdown(reply)
 
-        history.append({"role": "user", "content": user_input})
-        history.append({"role": "assistant", "content": reply})
-        utils.save_agent_chat_history(client_ip, history)
+            history.append({"role": "user", "content": user_input})
+            history.append({"role": "assistant", "content": reply})
+            utils.save_agent_chat_sessions(client_ip, sessions)
+    else:
+        st.info("지난 대화를 보고 있어요 · 이어서 얘기하려면 위에서 '현재 대화'를 선택하세요.")
 
     theme.footer("AI AGENT · Gemini 연동 · 수집 데이터 기반 벡터 검색은 추후 추가")

@@ -110,41 +110,60 @@ def test_load_channel_visibility_ignores_unknown_channel_names(tmp_path, monkeyp
     assert load_channel_visibility() == ["네이버"]
 
 
-def test_load_agent_chat_history_defaults_to_empty_list_when_missing(tmp_path, monkeypatch):
+def test_load_agent_chat_sessions_defaults_to_empty_list_when_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(utils, "AGENT_CHAT_HISTORY_FILE", tmp_path / "agent_chat_history.json")
 
-    assert utils.load_agent_chat_history("192.168.1.1") == []
+    assert utils.load_agent_chat_sessions("192.168.1.1") == []
 
 
-def test_save_and_load_agent_chat_history_roundtrips_for_given_ip(tmp_path, monkeypatch):
+def test_save_and_load_agent_chat_sessions_roundtrips_for_given_ip(tmp_path, monkeypatch):
     monkeypatch.setattr(utils, "AGENT_CHAT_HISTORY_FILE", tmp_path / "agent_chat_history.json")
-    history = [{"role": "user", "content": "안녕"}, {"role": "assistant", "content": "안녕하세요!"}]
+    sessions = [
+        {"started_at": "2026-08-06 09:00", "messages": [{"role": "user", "content": "안녕"}]},
+        {"started_at": "2026-08-06 10:00", "messages": [{"role": "assistant", "content": "안녕하세요!"}]},
+    ]
 
-    utils.save_agent_chat_history("192.168.1.1", history)
+    utils.save_agent_chat_sessions("192.168.1.1", sessions)
 
-    assert utils.load_agent_chat_history("192.168.1.1") == history
+    assert utils.load_agent_chat_sessions("192.168.1.1") == sessions
 
 
-def test_agent_chat_history_is_isolated_per_ip(tmp_path, monkeypatch):
+def test_agent_chat_sessions_are_isolated_per_ip(tmp_path, monkeypatch):
+    monkeypatch.setattr(utils, "AGENT_CHAT_HISTORY_FILE", tmp_path / "agent_chat_history.json")
+    ip1_sessions = [{"started_at": "", "messages": [{"role": "user", "content": "IP1 메시지"}]}]
+    ip2_sessions = [{"started_at": "", "messages": [{"role": "user", "content": "IP2 메시지"}]}]
+
+    utils.save_agent_chat_sessions("192.168.1.1", ip1_sessions)
+    utils.save_agent_chat_sessions("192.168.1.2", ip2_sessions)
+
+    assert utils.load_agent_chat_sessions("192.168.1.1") == ip1_sessions
+    assert utils.load_agent_chat_sessions("192.168.1.2") == ip2_sessions
+
+
+def test_load_agent_chat_sessions_returns_empty_list_for_blank_ip(tmp_path, monkeypatch):
     monkeypatch.setattr(utils, "AGENT_CHAT_HISTORY_FILE", tmp_path / "agent_chat_history.json")
 
-    utils.save_agent_chat_history("192.168.1.1", [{"role": "user", "content": "IP1 메시지"}])
-    utils.save_agent_chat_history("192.168.1.2", [{"role": "user", "content": "IP2 메시지"}])
-
-    assert utils.load_agent_chat_history("192.168.1.1") == [{"role": "user", "content": "IP1 메시지"}]
-    assert utils.load_agent_chat_history("192.168.1.2") == [{"role": "user", "content": "IP2 메시지"}]
+    assert utils.load_agent_chat_sessions("") == []
 
 
-def test_load_agent_chat_history_returns_empty_list_for_blank_ip(tmp_path, monkeypatch):
-    monkeypatch.setattr(utils, "AGENT_CHAT_HISTORY_FILE", tmp_path / "agent_chat_history.json")
-
-    assert utils.load_agent_chat_history("") == []
-
-
-def test_save_agent_chat_history_does_nothing_for_blank_ip(tmp_path, monkeypatch):
+def test_save_agent_chat_sessions_does_nothing_for_blank_ip(tmp_path, monkeypatch):
     history_file = tmp_path / "agent_chat_history.json"
     monkeypatch.setattr(utils, "AGENT_CHAT_HISTORY_FILE", history_file)
 
-    utils.save_agent_chat_history("", [{"role": "user", "content": "무시되어야 함"}])
+    utils.save_agent_chat_sessions("", [{"started_at": "", "messages": [{"role": "user", "content": "무시되어야 함"}]}])
 
     assert not history_file.exists()
+
+
+def test_load_agent_chat_sessions_migrates_old_flat_message_list_format(tmp_path, monkeypatch):
+    """초기 버전은 IP당 메시지 리스트를 그대로 저장했다 — 기존 파일이 남아있어도 깨지지
+    않고 진행 중인 대화 하나로 마이그레이션되는지 확인."""
+    history_file = tmp_path / "agent_chat_history.json"
+    monkeypatch.setattr(utils, "AGENT_CHAT_HISTORY_FILE", history_file)
+    old_format = {"192.168.1.1": [{"role": "user", "content": "옛 형식 메시지"}]}
+    history_file.write_text(json.dumps(old_format, ensure_ascii=False), encoding="utf-8")
+
+    sessions = utils.load_agent_chat_sessions("192.168.1.1")
+
+    assert len(sessions) == 1
+    assert sessions[0]["messages"] == [{"role": "user", "content": "옛 형식 메시지"}]

@@ -100,20 +100,32 @@ def save_channel_visibility(channels: list) -> None:
     save_json(CHANNEL_VISIBILITY_FILE, {"enabled_channels": channels})
 
 
-def load_agent_chat_history(ip: str) -> list:
+def load_agent_chat_sessions(ip: str) -> list:
     """AI AGENT 채팅 기록을 접속 IP 기준으로 불러온다 — F5 새로고침이나 다른 탭 이동 시에도
     대화가 유지되도록 session_state가 아니라 파일에 저장한다. IP 기반 접근 제어를 쓰는
-    이 앱의 기존 사용자 식별 방식과 동일하게 IP를 키로 쓴다."""
-    all_histories = load_json(AGENT_CHAT_HISTORY_FILE, {})
-    return all_histories.get(ip, []) if ip else []
+    이 앱의 기존 사용자 식별 방식과 동일하게 IP를 키로 쓴다.
+
+    반환값은 [{"started_at": "...", "messages": [{"role", "content"}, ...]}, ...] 형태로,
+    오래된 대화부터 순서대로 담겨 있다 — 마지막 항목이 진행 중인(가장 최근) 대화다. 사용자가
+    "대화 초기화"를 누르면 기존 대화는 지우지 않고 새 항목을 추가해서, 지난 대화를 나중에도
+    볼 수 있게 한다."""
+    if not ip:
+        return []
+    all_sessions = load_json(AGENT_CHAT_HISTORY_FILE, {})
+    raw = all_sessions.get(ip, [])
+    if raw and isinstance(raw[0], dict) and "role" in raw[0]:
+        # 세션 단위로 나누기 전(초기 버전)에 저장된, 메시지 리스트 그대로인 옛 형식 — 진행 중인
+        # 대화 하나로 취급해 마이그레이션한다.
+        return [{"started_at": "", "messages": raw}]
+    return raw
 
 
-def save_agent_chat_history(ip: str, history: list) -> None:
+def save_agent_chat_sessions(ip: str, sessions: list) -> None:
     if not ip:
         return
-    all_histories = load_json(AGENT_CHAT_HISTORY_FILE, {})
-    all_histories[ip] = history
-    save_json(AGENT_CHAT_HISTORY_FILE, all_histories)
+    all_sessions = load_json(AGENT_CHAT_HISTORY_FILE, {})
+    all_sessions[ip] = sessions
+    save_json(AGENT_CHAT_HISTORY_FILE, all_sessions)
 
 
 _RELATIVE_KOREAN_DATE_RE = re.compile(r"^(\d+)(분|시간|일)\s*전$")
