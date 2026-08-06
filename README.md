@@ -14,7 +14,7 @@
 | 📄 PDF 보고서 | 표지 + 랭킹 1~5위 카드뉴스 형태(1080×1080, 6페이지) — 실제 다운로드 가능한 PDF 생성 |
 | 🏛️ 정책 뉴스 | 정부 정책 보도자료 전용 화면 — hero/지표, 경영진 브리핑, 발표 추이 차트, 카테고리 탭별 점수 랭킹 |
 | 🤖 AI AGENT | Gemini 기반 자유 대화형 챗봇(`st.chat_input`) — 아직 수집 데이터(벡터 검색) 연동 전, 일반 대화만 지원 |
-| ⚙️ 설정 (관리자 전용) | 접근 제어(IP 화이트리스트) · 데이터 수집 · 데이터 관리 · 서버 배포 |
+| ⚙️ 설정 (관리자 전용) | 접근 제어(IP 화이트리스트) · 데이터 수집 · 데이터 관리 · 벡터 데이터 · 로그 · 서버 배포 |
 
 메뉴 순서: 오늘의 뉴스 → 부동산사 동향 → 브리핑 → 정책 뉴스 → 뉴스 검색 → PDF 보고서 → AI AGENT
 → (관리자만) 설정.
@@ -96,7 +96,10 @@
   사용하며, 원문(`content`)이 실제로 수집된 기사만 대상으로 한다(제목·짧은 스니펫만 있는 기사는
   근거 부족으로 요약하지 않고 기존 발췌 방식을 그대로 씀). 생성된 요약은 `mentions.summary`
   컬럼에 저장되어 같은 기사를 다시 요약하지 않는다 — `views/report.py`의 `_ensure_pdf_summaries()`가
-  top5 중 `summary`가 비어있는 항목만 호출한다
+  top5 중 `summary`가 비어있는 항목만 호출한다. 렌더링 시점에 처음 요약하면 Gemini 호출을
+  기다려야 해서 첫 로딩이 느려지므로, `scheduler.py`가 5분 주기(+앱 시작 시 즉시)로 백그라운드에서
+  미리 요약해 둔다(`summarizer.presummarize_top_pdf_items`) — 렌더링 경로는 대부분 이미 채워진
+  요약을 그대로 쓰고 실제 호출 없이 넘어간다
 
 ## AI AGENT (Gemini 챗봇)
 
@@ -144,13 +147,31 @@ summarizer.py와 같은 `.env`의 `GEMINI_API_KEYS`/`GEMINI_MODEL`을 재사용�
 시점에 캐시를 비우는 것(감지 훅이 필요해 복잡도 대비 이득이 적다고 판단, 60초면 자연히
 해소됨), 뉴스 검색/부동산사 동향 검색어 입력의 debounce.
 
+## 벡터 데이터 · 접속 로그 (설정 → 벡터 데이터 / 로그)
+
+- **벡터 데이터**: `vectorizer.py`가 Gemini 임베딩 모델(`gemini-embedding-001`, 3072차원)로
+  `mentions`/`policy_events`의 아직 벡터화되지 않은 항목을 임베딩해 각 테이블의 `embedding`
+  컬럼(JSON 배열)에 저장한다. summarizer.py와 같은 `.env`의 `GEMINI_API_KEYS`를 재사용하고,
+  여러 키 순차 failover도 동일하게 지원한다. "🧬 벡터화 진행" 버튼은 신규 게시물/네이버뉴스
+  수집과 같은 백그라운드 스레드 패턴(`start_background_vectorize`)으로 동작해 페이지를
+  벗어나거나 새로고침해도 계속 진행되고, 실행 이력은 `vector_run_logs` 테이블에 남는다.
+  **벡터 자체를 이용한 검색(코사인 유사도 등)과 AI AGENT 연동은 이번에는 다루지 않고 추후
+  과제로 남겨둔다** — 지금은 벡터를 만들어 저장하는 기능까지만 구현했다.
+- **접속 로그**: `db.activity_log` 테이블에 접속 IP·화면·행위·상세내용을 남긴다. 페이지
+  방문(전체 화면 공통, `app.py`), 뉴스 검색(검색어), AI 채팅 전송, PDF 생성, 관리자 작업
+  (수집 실행/데이터 삭제/벡터화 실행)을 기록한다. 페이지 방문·검색은 Streamlit이 위젯
+  상호작용마다 스크립트를 처음부터 다시 실행하는 특성상 매 rerun마다 기록하면 로그가
+  넘치므로, `st.session_state`에 마지막으로 기록한 값을 저장해두고 값이 실제로 바뀔 때만
+  남긴다. 설정 화면의 "로그" 탭에서 IP 필터·검색어·표시 개수·페이지네이션으로 조회할 수
+  있다(`_render_pagination_controls` 등 기존 조회 탭과 같은 UI 패턴 재사용).
+
 ## 기술 스택
 
 - Streamlit (`st.navigation(position="top")` 기반 멀티페이지, 오렌지 테마 커스텀 CSS)
 - SQLite (수집 데이터) / JSON (키워드·스케줄·접근 제어 설정)
 - requests + BeautifulSoup / stdlib `xml.etree` (RSS) — 크롤링
 - Playwright(Chromium) — PDF 보고서 생성
-- google-genai (Gemini) — PDF 상위 5건 기사 요약
+- google-genai (Gemini) — PDF 상위 5건 기사 요약, AI AGENT 대화, 뉴스·정책 벡터화
 - paramiko (SSH/SFTP) — 원격 서버 배포
 
 ## 로컬 실행
@@ -183,12 +204,13 @@ news_feed.py        mentions 원본 → 화면 표시용 가공 (카테고리 �
 policy_feed.py      policy_events 원본 → 화면 표시용 가공 (정책 카테고리 분류·점수·메달·발표 추이)
 summarizer.py       PDF 상위 5건 전용 Gemini 기사 요약 (원문 있는 기사만, 결과는 DB에 캐싱)
 agent_chat.py       AI AGENT 페이지용 범용 Gemini 대화 (매 메시지마다 새 세션에 이력 주입)
+vectorizer.py       mentions/policy_events Gemini 임베딩 벡터화 + 백그라운드 실행/이력
 access_control.py    IP 화이트리스트 · 관리자 판별
-db.py               수집 데이터 SQLite 저장소 (WAL 모드)
+db.py               수집 데이터 SQLite 저장소 (WAL 모드) + 벡터/접속 로그 테이블
 cached_db.py        db.py 조회를 60초 TTL로 캐싱 (동시 접속·반복 상호작용 시 중복 조회 방지)
 report_pdf.py        PDF 보고서 카드덱 HTML 템플릿 + Playwright PDF 생성 (미리보기와 공유)
 collector.py         키워드×채널 수집 조율, 노이즈 필터링, 일회성 백필(run_backfill)
-scheduler.py         자동 수집 스케줄러(백그라운드 스레드, 3개 독립 파이프라인)
+scheduler.py         자동 수집 스케줄러(백그라운드 스레드, 신규/정책/네이버뉴스 + PDF 요약 미리 생성)
 utils.py             키워드/스케줄/채널 표시 설정 로드·저장, 상대 날짜 변환
 crawlers/            네이버·구글·다음·디시인사이드 스크래퍼 + 네이버뉴스API(공식 API) + 정책 7개 기관
 views/               페이지별 렌더 함수 (news_today, firms, briefings, search, report, policy_news, agent, settings)
