@@ -52,16 +52,17 @@ DECK_CSS = """
 .repcard h2 { font-size:38px; line-height:1.32; font-weight:900; color:#202224; margin:24px 0 0;
   letter-spacing:-1px; flex:0 0 auto; max-height:160px; overflow:hidden; }
 .repcard .rule { width:70px; height:5px; background:#FF8900; border-radius:3px; margin:18px 0 24px; flex:0 0 auto; }
-.repcard .gist { display:flex; gap:14px; font-size:24px; line-height:1.65; color:#3a3a3d; flex:0 1 auto; min-height:0; }
+.repcard .gist { display:flex; gap:14px; font-size:22px; line-height:1.55; color:#3a3a3d; flex:1 1 auto;
+  min-height:0; max-height:360px; overflow:hidden; }
 .repcard .gist .ck { width:30px; height:30px; border-radius:50%; background:#FF8900; color:#fff;
   display:flex; align-items:center; justify-content:center; font-size:17px; flex:0 0 auto; margin-top:4px; }
-.repcard .metagrid { flex:1 1 auto; min-height:0; display:flex; align-items:center; gap:16px; margin:20px 0; }
-.repcard .metatile { flex:1; background:#faf7f4; border:1px solid #f0ece6; border-radius:16px;
-  padding:22px 18px; text-align:center; }
-.repcard .metatile .mt-label { font-size:15px; color:#98a3a8; font-weight:700; margin-bottom:8px; }
-.repcard .metatile .mt-value { font-size:21px; color:#202224; font-weight:800; line-height:1.3; }
+.repcard .metagrid { flex:0 0 auto; display:flex; flex-wrap:wrap; gap:10px; margin:14px 0 0; }
+.repcard .metatile { flex:0 0 auto; background:#faf7f4; border:1px solid #f0ece6; border-radius:10px;
+  padding:8px 14px; display:flex; align-items:baseline; gap:8px; }
+.repcard .metatile .mt-label { font-size:13px; color:#98a3a8; font-weight:700; }
+.repcard .metatile .mt-value { font-size:16px; color:#202224; font-weight:800; }
 .repcard .why { background:#fff8f0; border:1px solid #f5ddb8; border-radius:18px; padding:20px 24px;
-  display:flex; gap:14px; flex:0 0 auto; }
+  display:flex; gap:14px; flex:0 0 auto; margin-top:14px; }
 .repcard .why .bulb { font-size:22px; }
 .repcard .why p { font-size:19px; line-height:1.5; color:#5c4a2e; margin:0; }
 .repcard .foot { display:flex; justify-content:space-between; align-items:center; margin-top:18px;

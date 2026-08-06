@@ -12,6 +12,7 @@ RECENT_LIMIT = 200
 BROAD_LIMIT = 1000
 DISPLAY_LIMIT = 30
 RECENCY_HOURS = 12
+CONTENT_PREVIEW_LEN = 480
 
 CATEGORY_KEYWORDS = {
     "신규 도입": ["출시", "도입", "런칭", "오픈", "신규", "베타", "공개"],
@@ -91,6 +92,14 @@ def _signal_label(categories: list[str]) -> str:
     return f"{FALLBACK_EMOJI} {FALLBACK_CATEGORY}"
 
 
+def _truncate(text: str, limit: int) -> str:
+    """줄바꿈을 공백으로 접고, limit자를 넘으면 말줄임표를 붙여 자른다."""
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[:limit].rstrip() + "…"
+
+
 def _parse_collected_at(value: str):
     try:
         return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
@@ -121,9 +130,12 @@ def build_news_items(mentions: list[dict], own_brands: set, now: datetime | None
         categories = categorize(text)
         collected = _parse_collected_at(m.get("collected_at", ""))
 
+        content = (m.get("content") or "").strip()
         snippet = (m.get("snippet") or "").strip()
         title = (m.get("title") or "").strip()
-        if snippet and snippet != title:
+        if content:
+            desc = [_truncate(content, CONTENT_PREVIEW_LEN)]
+        elif snippet and snippet != title:
             desc = [snippet]
         else:
             desc = [f"{m.get('channel', '')} 채널에서 수집된 기사입니다 · 원문 링크에서 전체 내용을 확인하세요."]

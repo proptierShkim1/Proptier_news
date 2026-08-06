@@ -3,10 +3,10 @@ from datetime import datetime
 import news_feed
 
 
-def _mention(title, brand="직방", url="https://x/1", collected_at="2026-08-05 09:00:00", snippet=""):
+def _mention(title, brand="직방", url="https://x/1", collected_at="2026-08-05 09:00:00", snippet="", content=""):
     return {
         "title": title, "brand": brand, "url": url, "collected_at": collected_at,
-        "snippet": snippet, "channel": "네이버", "posted_at": "",
+        "snippet": snippet, "content": content, "channel": "네이버", "posted_at": "",
     }
 
 
@@ -25,6 +25,28 @@ def test_build_news_items_falls_back_to_channel_note_when_snippet_missing_or_dup
 
     assert "네이버" in items[0]["desc"][0]
     assert items[0]["desc"][0] != "직방 AI 매물 추천 출시"
+
+
+def test_build_news_items_prefers_full_content_over_snippet_when_available():
+    mentions = [_mention(
+        "직방 AI 매물 추천 출시", snippet="짧은 미리보기",
+        content="원문 첫 문단입니다. " * 5,
+    )]
+
+    items = news_feed.build_news_items(mentions, own_brands=set())
+
+    assert items[0]["desc"][0].startswith("원문 첫 문단입니다.")
+    assert "짧은 미리보기" not in items[0]["desc"][0]
+
+
+def test_build_news_items_truncates_long_content_to_preview_length():
+    mentions = [_mention("직방 AI 매물 추천 출시", content="가" * 500)]
+
+    items = news_feed.build_news_items(mentions, own_brands=set())
+
+    desc = items[0]["desc"][0]
+    assert desc.endswith("…")
+    assert len(desc) == news_feed.CONTENT_PREVIEW_LEN + 1
 
 
 def test_build_news_items_decision_line_names_matched_categories():
