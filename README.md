@@ -104,12 +104,40 @@
 summarizer.py와 같은 `.env`의 `GEMINI_API_KEYS`/`GEMINI_MODEL`을 재사용한다. 아직 수집 데이터
 (mentions·policy_events) 벡터 검색 연동은 없고, 일반 LLM 대화만 지원한다(추후 추가 예정).
 
-- **대화 이력은 순수 텍스트로만 세션에 보관하고, 매 메시지마다 새 `genai.Client`/`chats` 세션을
+- **대화 이력은 순수 텍스트로만 보관하고, 매 메시지마다 새 `genai.Client`/`chats` 세션을
   만들어 이전 대화를 주입한다.** google-genai의 `chat` 세션 객체를 `st.session_state`에 그대로
   들고 있다가 재사용하면 내부 HTTP 클라이언트가 닫힌 상태로 남아 "Cannot send a request, as the
   client has been closed" 오류가 나는 걸 실제로 확인했다 — Streamlit이 재실행마다 다른 스레드에서
   스크립트를 돌릴 수 있어서인 것으로 보임. 매번 새로 만들면 이 문제가 없고, 여러 키로
   failover하기도 더 쉽다.
+- **대화 이력은 `st.session_state`가 아니라 접속 IP 기준 파일(`data/agent_chat_history.json`)에
+  저장한다.** 이 앱은 로그인이 없고 IP 기반 접근 제어만 있어서, IP를 기존 `access_control.py`와
+  같은 방식의 사용자 식별 키로 재사용했다. F5 새로고침이나 다른 탭 이동으로 브라우저 세션이
+  끊겨도(Streamlit의 session_state는 이때 초기화됨) "대화 초기화" 버튼을 누르기 전까지 대화가
+  이어진다.
+
+## 성능 · 동시 접속
+
+여러 명이 동시에 쓸 걸 대비해 점검하고 고친 부분:
+
+- **SQLite WAL 모드 + 연결 타임아웃 30초** (`db.py`) — 기본 롤백저널 모드는 쓰기 중에 읽기까지
+  막아서 동시 접속이 늘면 "database is locked" 오류 위험이 커진다. WAL 모드는 읽기가 쓰기를
+  막지 않는다(쓰기끼리는 여전히 직렬화됨).
+- **DB 조회 60초 TTL 캐싱** (`cached_db.py`) — Streamlit은 위젯 값이 바뀔 때마다(검색어 입력,
+  필터 변경, 브리핑 날짜 선택 등) 스크립트를 처음부터 다시 실행한다. 캐싱 전에는 그때마다 DB를
+  다시 조회하고 카테고리 분류·이슈 클러스터링까지 처음부터 재계산했다 — 오늘의뉴스/부동산사동향/
+  브리핑/뉴스검색/PDF보고서/정책뉴스 6개 화면 모두. 지금은 같은 조회 조건이면 여러 사용자가
+  동시에 봐도, 또는 같은 사용자가 반복 상호작용해도 캐시를 공유한다. 관리자가 데이터를 삭제하면
+  (`views/settings.py`) 캐시를 즉시 비워서 삭제가 최대 60초 늦게 반영되는 걸 막는다.
+- **카테고리 분류 캐싱** (`news_feed.categorize()`/`policy_feed.categorize()`에 `lru_cache`) —
+  지표/브리핑/이슈펄스/액션레이더 등 여러 함수가 같은 mention의 제목·스니펫을 각자 다시
+  분류하던 걸 캐싱으로 줄였다(렌더링 한 번에 최대 4배 중복 계산).
+- **PDF AI 요약도 같은 캐시 무효화 원칙을 따른다** (`views/report.py`) — 새로 요약을 만들면
+  `cached_db`도 함께 비워, 60초 안에 다른 사용자가 같은 항목을 중복 요약 호출하는 걸 줄인다.
+
+**아직 다루지 않은 부분(의도적으로 보류):** 자동/수동 수집이 백그라운드 스레드에서 끝나는
+시점에 캐시를 비우는 것(감지 훅이 필요해 복잡도 대비 이득이 적다고 판단, 60초면 자연히
+해소됨), 뉴스 검색/부동산사 동향 검색어 입력의 debounce.
 
 ## 기술 스택
 
@@ -151,7 +179,8 @@ policy_feed.py      policy_events 원본 → 화면 표시용 가공 (정책 카
 summarizer.py       PDF 상위 5건 전용 Gemini 기사 요약 (원문 있는 기사만, 결과는 DB에 캐싱)
 agent_chat.py       AI AGENT 페이지용 범용 Gemini 대화 (매 메시지마다 새 세션에 이력 주입)
 access_control.py    IP 화이트리스트 · 관리자 판별
-db.py               수집 데이터 SQLite 저장소
+db.py               수집 데이터 SQLite 저장소 (WAL 모드)
+cached_db.py        db.py 조회를 60초 TTL로 캐싱 (동시 접속·반복 상호작용 시 중복 조회 방지)
 report_pdf.py        PDF 보고서 카드덱 HTML 템플릿 + Playwright PDF 생성 (미리보기와 공유)
 collector.py         키워드×채널 수집 조율, 노이즈 필터링, 일회성 백필(run_backfill)
 scheduler.py         자동 수집 스케줄러(백그라운드 스레드, 3개 독립 파이프라인)
