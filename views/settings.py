@@ -1055,20 +1055,24 @@ def _show_vectorize_progress(run_id):
 
 def _render_vector_data_tab():
     st.caption(
-        "수집된 뉴스(mentions)·정책(policy_events) 텍스트를 Gemini 임베딩으로 벡터화해 DB에 "
-        "저장합니다. 벡터 자체를 이용한 검색(AI AGENT 연동)은 추후 추가될 예정이고, 여기서는 "
-        "벡터를 만들어 두는 것까지 다룹니다."
+        "수집된 뉴스(mentions)·정책(policy_events) 텍스트를 Gemini 임베딩으로 벡터화해 DB와 "
+        "sqlite-vec 색인(mention_vectors/policy_vectors)에 저장합니다. AI AGENT가 질문을 받으면 "
+        "이 색인에서 유사도가 가까운 문서를 찾아 답변 근거로 사용합니다."
     )
     if not vectorizer.has_api_keys():
         st.warning("⚠️ .env에 GEMINI_API_KEYS가 설정되어 있지 않아 벡터화를 실행할 수 없습니다.")
 
     mentions_pending = db.count_mentions_without_embedding()
     policy_pending = db.count_policy_events_without_embedding()
-    c1, c2 = st.columns(2)
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.metric("뉴스 벡터화 대기", f"{mentions_pending:,}건", f"전체 {db.count_mentions():,}건 중")
     with c2:
         st.metric("정책 벡터화 대기", f"{policy_pending:,}건", f"전체 {db.count_policy_events():,}건 중")
+    with c3:
+        st.metric("뉴스 색인 완료", f"{db.count_mention_vector_index():,}건")
+    with c4:
+        st.metric("정책 색인 완료", f"{db.count_policy_vector_index():,}건")
 
     st.divider()
     running_run_id = vectorizer.active_vectorize_run_id()

@@ -7,3 +7,4 @@ beautifulsoup4
 pandas
 playwright
 google-genai
+sqlite-vec

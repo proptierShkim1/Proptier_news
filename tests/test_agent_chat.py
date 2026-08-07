@@ -82,3 +82,50 @@ def test_ask_returns_fallback_message_when_all_keys_fail(monkeypatch):
         result = agent_chat.ask([], "안녕")
 
     assert "실패" in result
+
+
+def test_ask_appends_context_to_system_instruction_when_provided(monkeypatch):
+    monkeypatch.setattr(agent_chat.summarizer, "_load_api_keys", lambda: ["key1"])
+    fake_chat = MagicMock()
+    fake_chat.send_message.return_value = MagicMock(text="응답")
+    fake_client = MagicMock()
+    fake_client.chats.create.return_value = fake_chat
+
+    with patch.object(agent_chat.genai, "Client", return_value=fake_client):
+        agent_chat.ask([], "직방 최근 동향 알려줘", context="- [뉴스] 직방 관련 소식")
+
+    instruction = fake_client.chats.create.call_args.kwargs["config"]["system_instruction"]
+    assert "직방 관련 소식" in instruction
+
+
+def test_ask_uses_no_context_note_when_context_is_empty(monkeypatch):
+    monkeypatch.setattr(agent_chat.summarizer, "_load_api_keys", lambda: ["key1"])
+    fake_chat = MagicMock()
+    fake_chat.send_message.return_value = MagicMock(text="응답")
+    fake_client = MagicMock()
+    fake_client.chats.create.return_value = fake_chat
+
+    with patch.object(agent_chat.genai, "Client", return_value=fake_client):
+        agent_chat.ask([], "안녕")
+
+    instruction = fake_client.chats.create.call_args.kwargs["config"]["system_instruction"]
+    assert "찾지 못했" in instruction
+
+
+def test_build_grounding_context_formats_mention_and_policy_hits():
+    mention_hits = [
+        {"title": "직방 신규 서비스 출시", "brand": "직방", "posted_at": "2026-08-01", "summary": "직방이 새 서비스를 냈다."},
+    ]
+    policy_hits = [
+        {"title": "국토부 규제 발표", "source": "국토부", "announced_at": "2026-08-02"},
+    ]
+
+    context = agent_chat.build_grounding_context(mention_hits, policy_hits)
+
+    assert "직방 신규 서비스 출시" in context
+    assert "직방이 새 서비스를 냈다." in context
+    assert "국토부 규제 발표" in context
+
+
+def test_build_grounding_context_returns_empty_string_when_no_hits():
+    assert agent_chat.build_grounding_context([], []) == ""

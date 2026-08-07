@@ -6,14 +6,23 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
+import sqlite_vec
+
 DB_PATH = Path(__file__).resolve().parent / "data" / "news.db"
+VECTOR_DIM = 3072  # gemini-embedding-001 출력 차원
 
 
 def _connect() -> sqlite3.Connection:
     """동시 여러 사용자가 접근할 때 쓰기 잠금으로 인한 'database is locked' 오류를 줄이려고
     busy timeout을 기본값(5초)보다 넉넉하게 준다. WAL 모드(읽기가 쓰기를 막지 않음)는
-    init_db()에서 DB 파일당 한 번만 설정하면 되므로 여기서 매번 반복하지 않는다."""
-    return sqlite3.connect(DB_PATH, timeout=30.0)
+    init_db()에서 DB 파일당 한 번만 설정하면 되므로 여기서 매번 반복하지 않는다.
+    sqlite-vec 확장을 매 연결마다 로드해서 mention_vectors/policy_vectors 가상 테이블을
+    쓸 수 있게 한다 — 로딩 자체는 캐싱된 네이티브 라이브러리를 참조하는 정도라 비용이 작다."""
+    con = sqlite3.connect(DB_PATH, timeout=30.0)
+    con.enable_load_extension(True)
+    sqlite_vec.load(con)
+    con.enable_load_extension(False)
+    return con
 
 
 _MENTIONS_SQL = """
@@ -103,6 +112,15 @@ CREATE TABLE IF NOT EXISTS activity_log (
 );
 """
 
+def _mention_vectors_sql() -> str:
+    # rowid = mentions.id로 맞춰서 JOIN으로 원본 행을 바로 가져올 수 있게 한다. VECTOR_DIM을
+    # init_db() 호출 시점에 읽어서, 테스트에서 monkeypatch로 작은 차원을 쓸 수 있게 한다.
+    return f"CREATE VIRTUAL TABLE IF NOT EXISTS mention_vectors USING vec0(embedding float[{VECTOR_DIM}])"
+
+
+def _policy_vectors_sql() -> str:
+    return f"CREATE VIRTUAL TABLE IF NOT EXISTS policy_vectors USING vec0(embedding float[{VECTOR_DIM}])"
+
 
 def _ensure_column(con: sqlite3.Connection, table: str, column: str, definition: str) -> None:
     """table에 column이 없으면 ALTER TABLE로 추가한다 — 스키마에 새 컬럼을 추가했을 때
@@ -127,6 +145,8 @@ def init_db() -> None:
         con.execute(_POLICY_RUN_LOGS_SQL)
         con.execute(_VECTOR_RUN_LOGS_SQL)
         con.execute(_ACTIVITY_LOG_SQL)
+        con.execute(_mention_vectors_sql())
+        con.execute(_policy_vectors_sql())
         _ensure_column(con, "mentions", "summary", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(con, "mentions", "embedding", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(con, "policy_events", "embedding", "TEXT NOT NULL DEFAULT ''")
@@ -526,3 +546,94 @@ def distinct_activity_ips() -> list[str]:
     init_db()
     with _connect() as con:
         return [row[0] for row in con.execute("SELECT DISTINCT ip FROM activity_log ORDER BY ip")]
+
+
+def _upsert_vector(con: sqlite3.Connection, table: str, rowid: int, embedding: list[float]) -> None:
+    """vec0 가상 테이블은 rowid 충돌에 대해 INSERT OR REPLACE를 지원하지 않아서
+    DELETE 후 INSERT로 upsert한다."""
+    con.execute(f"DELETE FROM {table} WHERE rowid = ?", [rowid])
+    con.execute(
+        f"INSERT INTO {table}(rowid, embedding) VALUES (?, ?)",
+        [rowid, sqlite_vec.serialize_float32(embedding)],
+    )
+
+
+def upsert_mention_vector(mention_id: int, embedding: list[float]) -> None:
+    init_db()
+    with _connect() as con:
+        _upsert_vector(con, "mention_vectors", mention_id, embedding)
+
+
+def upsert_policy_vector(event_id: int, embedding: list[float]) -> None:
+    init_db()
+    with _connect() as con:
+        _upsert_vector(con, "policy_vectors", event_id, embedding)
+
+
+def search_mention_vectors(query_embedding: list[float], top_k: int = 5) -> list[dict]:
+    """질의 임베딩과 가장 가까운 mentions 상위 top_k건을 거리 오름차순(가까운 순)으로 반환한다.
+    아직 색인된 벡터가 없으면 빈 리스트를 반환한다."""
+    init_db()
+    with _connect() as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT m.*, v.distance AS distance FROM mention_vectors v "
+            "JOIN mentions m ON m.id = v.rowid "
+            "WHERE v.embedding MATCH ? AND k = ? "
+            "ORDER BY v.distance",
+            [sqlite_vec.serialize_float32(query_embedding), top_k],
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def search_policy_vectors(query_embedding: list[float], top_k: int = 5) -> list[dict]:
+    init_db()
+    with _connect() as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT p.*, v.distance AS distance FROM policy_vectors v "
+            "JOIN policy_events p ON p.id = v.rowid "
+            "WHERE v.embedding MATCH ? AND k = ? "
+            "ORDER BY v.distance",
+            [sqlite_vec.serialize_float32(query_embedding), top_k],
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def count_mention_vector_index() -> int:
+    init_db()
+    with _connect() as con:
+        return con.execute("SELECT COUNT(*) FROM mention_vectors").fetchone()[0]
+
+
+def count_policy_vector_index() -> int:
+    init_db()
+    with _connect() as con:
+        return con.execute("SELECT COUNT(*) FROM policy_vectors").fetchone()[0]
+
+
+def get_mentions_missing_vector_index(limit: int = 1000) -> list[dict]:
+    """embedding은 이미 만들어졌지만(mentions.embedding) 아직 mention_vectors 색인에는
+    들어가지 않은 행 — 색인 테이블이 새로 추가되기 전에 이미 벡터화된 데이터를
+    백필하거나(sync_vector_index), 색인이 유실된 경우를 복구하는 데 쓴다."""
+    init_db()
+    with _connect() as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT id, embedding FROM mentions WHERE embedding != '' "
+            "AND id NOT IN (SELECT rowid FROM mention_vectors) LIMIT :limit",
+            {"limit": limit},
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_policy_events_missing_vector_index(limit: int = 1000) -> list[dict]:
+    init_db()
+    with _connect() as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT id, embedding FROM policy_events WHERE embedding != '' "
+            "AND id NOT IN (SELECT rowid FROM policy_vectors) LIMIT :limit",
+            {"limit": limit},
+        ).fetchall()
+        return [dict(r) for r in rows]

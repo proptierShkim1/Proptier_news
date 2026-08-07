@@ -406,3 +406,95 @@ def test_distinct_activity_ips_returns_sorted_unique_ips(tmp_path, monkeypatch):
     db.log_activity("1.1.1.1", "브리핑", "페이지 방문")
 
     assert db.distinct_activity_ips() == ["1.1.1.1", "2.2.2.2"]
+
+
+def _isolate_small_vectors(tmp_path, monkeypatch):
+    """vec0 가상 테이블은 컬럼 차원이 고정이라, 실제 3072차원 대신 테스트용 4차원
+    벡터를 쓰도록 VECTOR_DIM을 낮춘다 — DB 파일도 매번 새로 만들어지므로 테스트 간
+    차원 충돌은 없다."""
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(db, "VECTOR_DIM", 4)
+
+
+def test_upsert_and_search_mention_vectors_orders_by_distance(tmp_path, monkeypatch):
+    _isolate_small_vectors(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1"))
+    db.insert_mention(_mention(url="https://x/2"))
+    ids = [r["id"] for r in db.get_mentions()]
+
+    db.upsert_mention_vector(ids[0], [1.0, 0.0, 0.0, 0.0])
+    db.upsert_mention_vector(ids[1], [0.0, 1.0, 0.0, 0.0])
+
+    results = db.search_mention_vectors([0.9, 0.1, 0.0, 0.0], top_k=2)
+
+    assert [r["id"] for r in results] == [ids[0], ids[1]]
+    assert results[0]["distance"] < results[1]["distance"]
+    assert results[0]["title"] == "제목"
+
+
+def test_upsert_mention_vector_replaces_existing_vector_for_same_id(tmp_path, monkeypatch):
+    _isolate_small_vectors(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1"))
+    mention_id = db.get_mentions()[0]["id"]
+
+    db.upsert_mention_vector(mention_id, [1.0, 0.0, 0.0, 0.0])
+    db.upsert_mention_vector(mention_id, [0.0, 0.0, 1.0, 0.0])
+
+    assert db.count_mention_vector_index() == 1
+    results = db.search_mention_vectors([0.0, 0.0, 1.0, 0.0], top_k=1)
+    assert results[0]["id"] == mention_id
+
+
+def test_upsert_and_search_policy_vectors_orders_by_distance(tmp_path, monkeypatch):
+    _isolate_small_vectors(tmp_path, monkeypatch)
+    db.insert_policy_event({
+        "source": "국토부", "title": "제목1", "url": "https://p/1", "department": "",
+        "announced_at": "2026-08-01", "view_count": 0, "collected_at": "2026-08-01 09:00:00",
+    })
+    db.insert_policy_event({
+        "source": "국토부", "title": "제목2", "url": "https://p/2", "department": "",
+        "announced_at": "2026-08-01", "view_count": 0, "collected_at": "2026-08-01 09:00:00",
+    })
+    ids = [r["id"] for r in db.get_policy_events()]
+
+    db.upsert_policy_vector(ids[0], [1.0, 0.0, 0.0, 0.0])
+    db.upsert_policy_vector(ids[1], [0.0, 1.0, 0.0, 0.0])
+
+    results = db.search_policy_vectors([0.9, 0.1, 0.0, 0.0], top_k=2)
+
+    assert [r["id"] for r in results] == [ids[0], ids[1]]
+
+
+def test_get_mentions_missing_vector_index_excludes_already_indexed(tmp_path, monkeypatch):
+    _isolate_small_vectors(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1"))
+    db.insert_mention(_mention(url="https://x/2"))
+    ids = [r["id"] for r in db.get_mentions()]
+    db.update_mention_embedding(ids[0], "[1.0, 0.0, 0.0, 0.0]")
+    db.update_mention_embedding(ids[1], "[0.0, 1.0, 0.0, 0.0]")
+    db.upsert_mention_vector(ids[0], [1.0, 0.0, 0.0, 0.0])
+
+    missing = db.get_mentions_missing_vector_index()
+
+    assert [r["id"] for r in missing] == [ids[1]]
+
+
+def test_get_policy_events_missing_vector_index_excludes_already_indexed(tmp_path, monkeypatch):
+    _isolate_small_vectors(tmp_path, monkeypatch)
+    db.insert_policy_event({
+        "source": "국토부", "title": "제목", "url": "https://p/1", "department": "",
+        "announced_at": "2026-08-01", "view_count": 0, "collected_at": "2026-08-01 09:00:00",
+    })
+    event_id = db.get_policy_events()[0]["id"]
+    db.update_policy_event_embedding(event_id, "[1.0, 0.0, 0.0, 0.0]")
+
+    missing = db.get_policy_events_missing_vector_index()
+
+    assert [r["id"] for r in missing] == [event_id]
+
+
+def test_count_mention_vector_index_and_policy_vector_index_start_at_zero(tmp_path, monkeypatch):
+    _isolate_small_vectors(tmp_path, monkeypatch)
+
+    assert db.count_mention_vector_index() == 0
+    assert db.count_policy_vector_index() == 0

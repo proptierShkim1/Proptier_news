@@ -6,4 +6,5 @@ beautifulsoup4
 pandas
 playwright
 google-genai
+sqlite-vec
 pytest>=8.0.0

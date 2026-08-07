@@ -76,12 +76,18 @@ def test_vectorize_pending_embeds_mentions_and_policy_events_separately():
          patch.object(vectorizer, "embed_text", return_value=[0.1, 0.2]) as mock_embed, \
          patch("db.update_mention_embedding") as mock_update_mention, \
          patch("db.update_policy_event_embedding") as mock_update_policy, \
+         patch("db.upsert_mention_vector") as mock_upsert_mention, \
+         patch("db.upsert_policy_vector") as mock_upsert_policy, \
+         patch("db.get_mentions_missing_vector_index", return_value=[]), \
+         patch("db.get_policy_events_missing_vector_index", return_value=[]), \
          patch("db.insert_vector_run_log") as mock_log:
         result = vectorizer.vectorize_pending(run_id="fixed-run")
 
     assert mock_embed.call_count == 2
     mock_update_mention.assert_called_once_with(1, "[0.1, 0.2]")
     mock_update_policy.assert_called_once_with(2, "[0.1, 0.2]")
+    mock_upsert_mention.assert_called_once_with(1, [0.1, 0.2])
+    mock_upsert_policy.assert_called_once_with(2, [0.1, 0.2])
     assert result["run_id"] == "fixed-run"
     assert result["mentions"] == {"fetched": 1, "inserted": 1, "skipped": 0}
     assert result["policy_events"] == {"fetched": 1, "inserted": 1, "skipped": 0}
@@ -95,11 +101,55 @@ def test_vectorize_pending_counts_failed_embeddings_as_skipped():
          patch("db.get_policy_events_without_embedding", return_value=[]), \
          patch.object(vectorizer, "embed_text", return_value=None), \
          patch("db.update_mention_embedding") as mock_update_mention, \
+         patch("db.upsert_mention_vector") as mock_upsert_mention, \
+         patch("db.get_mentions_missing_vector_index", return_value=[]), \
+         patch("db.get_policy_events_missing_vector_index", return_value=[]), \
          patch("db.insert_vector_run_log"):
         result = vectorizer.vectorize_pending(run_id="fixed-run")
 
     mock_update_mention.assert_not_called()
+    mock_upsert_mention.assert_not_called()
     assert result["mentions"] == {"fetched": 1, "inserted": 0, "skipped": 1}
+
+
+def test_sync_vector_index_backfills_mentions_and_policy_events_missing_from_index():
+    with patch("db.get_mentions_missing_vector_index", return_value=[{"id": 1, "embedding": "[0.1, 0.2]"}]), \
+         patch("db.get_policy_events_missing_vector_index", return_value=[{"id": 2, "embedding": "[0.3, 0.4]"}]), \
+         patch("db.upsert_mention_vector") as mock_upsert_mention, \
+         patch("db.upsert_policy_vector") as mock_upsert_policy:
+        result = vectorizer.sync_vector_index()
+
+    mock_upsert_mention.assert_called_once_with(1, [0.1, 0.2])
+    mock_upsert_policy.assert_called_once_with(2, [0.3, 0.4])
+    assert result == {"mentions": 1, "policy_events": 1}
+
+
+def test_search_similar_mentions_returns_empty_list_when_embedding_fails():
+    with patch.object(vectorizer, "embed_text", return_value=None):
+        assert vectorizer.search_similar_mentions("질문") == []
+
+
+def test_search_similar_mentions_delegates_to_db_search():
+    with patch.object(vectorizer, "embed_text", return_value=[0.1, 0.2]), \
+         patch("db.search_mention_vectors", return_value=[{"id": 1, "title": "제목"}]) as mock_search:
+        result = vectorizer.search_similar_mentions("질문", top_k=3)
+
+    mock_search.assert_called_once_with([0.1, 0.2], top_k=3)
+    assert result == [{"id": 1, "title": "제목"}]
+
+
+def test_search_similar_policy_events_returns_empty_list_when_embedding_fails():
+    with patch.object(vectorizer, "embed_text", return_value=None):
+        assert vectorizer.search_similar_policy_events("질문") == []
+
+
+def test_search_similar_policy_events_delegates_to_db_search():
+    with patch.object(vectorizer, "embed_text", return_value=[0.1, 0.2]), \
+         patch("db.search_policy_vectors", return_value=[{"id": 2, "title": "정책"}]) as mock_search:
+        result = vectorizer.search_similar_policy_events("질문", top_k=3)
+
+    mock_search.assert_called_once_with([0.1, 0.2], top_k=3)
+    assert result == [{"id": 2, "title": "정책"}]
 
 
 def test_start_background_vectorize_returns_none_when_already_running(monkeypatch):
