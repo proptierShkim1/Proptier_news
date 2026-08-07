@@ -164,3 +164,30 @@ def test_active_vectorize_run_id_reflects_module_state(monkeypatch):
     monkeypatch.setattr(vectorizer, "_active_run_id", "run-123")
 
     assert vectorizer.active_vectorize_run_id() == "run-123"
+
+
+def test_get_vectorize_progress_returns_empty_dict_for_unknown_run_id():
+    assert vectorizer.get_vectorize_progress("unknown-run") == {}
+
+
+def test_vectorize_mentions_updates_progress_incrementally():
+    mentions_pending = [
+        {"id": 1, "title": "제목1", "content": "본문1", "snippet": ""},
+        {"id": 2, "title": "제목2", "content": "본문2", "snippet": ""},
+    ]
+    seen_progress = []
+
+    def fake_embed(text):
+        seen_progress.append(vectorizer.get_vectorize_progress("run-x").get("mentions"))
+        return [0.1, 0.2]
+
+    with patch("db.get_mentions_without_embedding", return_value=mentions_pending), \
+         patch.object(vectorizer, "embed_text", side_effect=fake_embed), \
+         patch("db.update_mention_embedding"), patch("db.upsert_mention_vector"), \
+         patch("db.insert_vector_run_log"):
+        vectorizer._vectorize_mentions(limit=10, trigger="수동", run_id="run-x")
+
+    # 첫 번째 항목을 임베딩하기 시작할 때는 아직 이전 건의 진행 갱신이 없었어야 하고,
+    # 두 번째 항목을 시작할 때는 1/2까지 갱신되어 있어야 한다(매 건 처리 후 갱신).
+    assert seen_progress == [None, {"done": 1, "total": 2}]
+    assert vectorizer.get_vectorize_progress("run-x") == {"mentions": {"done": 2, "total": 2}}

@@ -1042,7 +1042,21 @@ def _render_data_management():
 
 # ── 벡터 데이터 ────────────────────────────────────────────────────────────
 
+_VECTORIZE_SOURCE_LABELS = {"mentions": "뉴스", "policy_events": "정책"}
+
+
+@st.fragment(run_every=2)
 def _show_vectorize_progress(run_id):
+    """2초마다 자동으로 새로 그려져서, 이 탭을 계속 보고 있어도 진행률이 실시간으로
+    올라간다(run_every 없이는 사용자가 뭔가를 클릭해야만 갱신됨). 소스 하나가 최대
+    200건까지 순차로 Gemini를 호출해서 몇 분씩 걸릴 수 있어, vector_run_logs에 행이
+    쌓이는 소스 완료 시점 이전에도 건별 진행 상황(get_vectorize_progress)을 보여준다."""
+    progress = vectorizer.get_vectorize_progress(run_id)
+    for source, label in _VECTORIZE_SOURCE_LABELS.items():
+        p = progress.get(source)
+        if p and p["total"]:
+            st.progress(p["done"] / p["total"], text=f"{label} 벡터화: {p['done']:,} / {p['total']:,}건")
+
     logs = [l for l in db.get_vector_run_logs(limit=50) if l["run_id"] == run_id]
     if logs:
         lines = [f"{e['source']}: 대상 {e['fetched']}건 · 성공 {e['inserted']}건 · 실패 {e['skipped']}건" for e in logs]
@@ -1077,8 +1091,15 @@ def _render_vector_data_tab():
     st.divider()
     running_run_id = vectorizer.active_vectorize_run_id()
     if running_run_id is None:
+        limit_per_source = st.number_input(
+            "소스당 처리 건수", min_value=1, max_value=20000,
+            value=max(mentions_pending, policy_pending, 1), step=100, key="vectorize_limit_per_source",
+            help="뉴스·정책 각각 이 건수만큼 처리합니다. 대기 건수보다 크게 잡으면 남은 건 전부 처리됩니다.",
+        )
         if st.button("🧬 벡터화 진행", type="primary", key="vectorize_now", disabled=not vectorizer.has_api_keys()):
-            started_run_id = vectorizer.start_background_vectorize(trigger="수동")
+            started_run_id = vectorizer.start_background_vectorize(
+                trigger="수동", limit_per_source=int(limit_per_source),
+            )
             if started_run_id:
                 db.log_activity(
                     st.session_state.get("_client_ip", ""), "설정 · 벡터 데이터", "벡터화 실행", started_run_id,

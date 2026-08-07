@@ -52,10 +52,29 @@ def embed_text(text: str) -> list[float] | None:
     return None
 
 
+_progress_lock = threading.Lock()
+_progress: dict[str, dict] = {}
+
+
+def _set_progress(run_id: str, source: str, done: int, total: int) -> None:
+    """run_id별 진행 상황을 소스(mentions/policy_events) 단위로 기록한다. 배치 하나가
+    최대 200건까지 순차로 Gemini를 호출해서 꽤 걸릴 수 있는데, 이전에는 각 소스가 전부
+    끝나야만 vector_run_logs에 1행이 쌓여서 그 사이엔 진행률을 알 수 없었다 — 매 건마다
+    갱신해서 UI가 실시간으로 몇 건째인지 보여줄 수 있게 한다."""
+    with _progress_lock:
+        _progress.setdefault(run_id, {})[source] = {"done": done, "total": total}
+
+
+def get_vectorize_progress(run_id: str) -> dict:
+    with _progress_lock:
+        return {k: dict(v) for k, v in _progress.get(run_id, {}).items()}
+
+
 def _vectorize_mentions(limit: int, trigger: str, run_id: str) -> dict:
     pending = db.get_mentions_without_embedding(limit)
+    total = len(pending)
     inserted = skipped = 0
-    for row in pending:
+    for i, row in enumerate(pending, start=1):
         text = f"{row['title']}\n{row.get('content') or row.get('snippet') or ''}".strip()
         vector = embed_text(text)
         if vector:
@@ -64,7 +83,8 @@ def _vectorize_mentions(limit: int, trigger: str, run_id: str) -> dict:
             inserted += 1
         else:
             skipped += 1
-    result = {"fetched": len(pending), "inserted": inserted, "skipped": skipped}
+        _set_progress(run_id, "mentions", i, total)
+    result = {"fetched": total, "inserted": inserted, "skipped": skipped}
     db.insert_vector_run_log({
         "ran_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "trigger": trigger,
         "source": "mentions", "ok": 1 if skipped == 0 else 0,
@@ -76,8 +96,9 @@ def _vectorize_mentions(limit: int, trigger: str, run_id: str) -> dict:
 
 def _vectorize_policy_events(limit: int, trigger: str, run_id: str) -> dict:
     pending = db.get_policy_events_without_embedding(limit)
+    total = len(pending)
     inserted = skipped = 0
-    for row in pending:
+    for i, row in enumerate(pending, start=1):
         text = f"{row['title']}\n{row.get('department', '')}".strip()
         vector = embed_text(text)
         if vector:
@@ -86,7 +107,8 @@ def _vectorize_policy_events(limit: int, trigger: str, run_id: str) -> dict:
             inserted += 1
         else:
             skipped += 1
-    result = {"fetched": len(pending), "inserted": inserted, "skipped": skipped}
+        _set_progress(run_id, "policy_events", i, total)
+    result = {"fetched": total, "inserted": inserted, "skipped": skipped}
     db.insert_vector_run_log({
         "ran_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "trigger": trigger,
         "source": "policy_events", "ok": 1 if skipped == 0 else 0,
