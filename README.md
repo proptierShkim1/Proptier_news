@@ -178,10 +178,11 @@ summarizer.py와 같은 `.env`의 `GEMINI_API_KEYS`/`GEMINI_MODEL`을 재사용�
   으로 동작해 페이지를 벗어나거나 새로고침해도 계속 진행되고, 실행 이력은 `vector_run_logs`
   테이블에 남는다. 색인 테이블이 나중에 추가되었거나 유실된 경우를 위해 매 벡터화 실행마다
   `embedding` 컬럼엔 있지만 색인엔 없는 행을 자동 백필한다(`vectorizer.sync_vector_index`).
-- **자동 벡터화**: 관리자가 "벡터화 진행" 버튼을 매번 누르지 않아도 되도록,
-  `scheduler.py`가 10분 주기(+앱 시작 시 즉시)로 자동 벡터화를 실행한다(`_tick_auto_vectorize`,
-  신규 게시물/정책/네이버뉴스 API 자동 수집과는 독립된 스케줄). `start_background_vectorize()`가
-  이미 진행 중인 벡터화는 알아서 건너뛰므로, 배치 하나가 주기보다 오래 걸려도 겹쳐 실행되지
+- **자동 벡터화**: 관리자가 "벡터화 진행" 버튼을 매번 누르지 않아도 되도록, 설정 → 벡터
+  데이터 탭의 "⏰ 벡터화 스케줄"에서 신규 게시물/정책/네이버뉴스 API와 같은 방식(HH:MM
+  시각을 `/`로 구분해 등록, 미등록 시 자동 실행 없음)으로 직접 관리한다.
+  `scheduler.py`의 `_tick_auto_vectorize`가 등록된 시각에 `start_background_vectorize()`를
+  호출하며, 이미 진행 중인 벡터화는 알아서 건너뛰므로 배치 하나가 오래 걸려도 겹쳐 실행되지
   않는다.
 - **AI AGENT 벡터 검색 연동**: 질문이 들어오면 `vectorizer.search_similar_mentions`/
   `search_similar_policy_events`가 질문을 임베딩해 `mention_vectors`/`policy_vectors`에서
