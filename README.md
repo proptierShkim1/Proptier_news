@@ -13,7 +13,7 @@
 | 🔍 뉴스 검색 | 키워드·기간·부동산사 필터링 검색 |
 | 📄 PDF 보고서 | 표지 + 랭킹 1~5위 카드뉴스 형태(1080×1080, 6페이지) — 실제 다운로드 가능한 PDF 생성 |
 | 🏛️ 정책 뉴스 | 정부 정책 보도자료 전용 화면 — hero/지표, 경영진 브리핑, 발표 추이 차트, 카테고리 탭별 점수 랭킹 |
-| 🤖 AI AGENT | Gemini 기반 자유 대화형 챗봇(`st.chat_input`) — 아직 수집 데이터(벡터 검색) 연동 전, 일반 대화만 지원 |
+| 🤖 AI AGENT | Gemini 기반 자유 대화형 챗봇(`st.chat_input`) — 수집 데이터(뉴스·정책)를 벡터 검색으로 찾아 답변에 근거로 사용 |
 | ⚙️ 설정 (관리자 전용) | 접근 제어(IP 화이트리스트) · 데이터 수집 · 데이터 관리 · 벡터 데이터 · 로그 · 서버 배포 |
 
 메뉴 순서: 오늘의 뉴스 → 부동산사 동향 → 브리핑 → 정책 뉴스 → 뉴스 검색 → PDF 보고서 → AI AGENT
@@ -104,8 +104,9 @@
 ## AI AGENT (Gemini 챗봇)
 
 `agent_chat.py` + `views/agent.py` — `st.chat_input`/`st.chat_message` 기반 자유 대화 챗봇.
-summarizer.py와 같은 `.env`의 `GEMINI_API_KEYS`/`GEMINI_MODEL`을 재사용한다. 아직 수집 데이터
-(mentions·policy_events) 벡터 검색 연동은 없고, 일반 LLM 대화만 지원한다(추후 추가 예정).
+summarizer.py와 같은 `.env`의 `GEMINI_API_KEYS`/`GEMINI_MODEL`을 재사용한다. 수집 데이터
+(mentions·policy_events) 벡터 검색으로 관련 문서를 찾아 답변 근거로 쓴다 — 자세한 내용은
+"벡터 데이터 · 접속 로그" 섹션의 "AI AGENT 벡터 검색 연동" 참고.
 
 - **대화 이력은 순수 텍스트로만 보관하고, 매 메시지마다 새 `genai.Client`/`chats` 세션을
   만들어 이전 대화를 주입한다.** google-genai의 `chat` 세션 객체를 `st.session_state`에 그대로
@@ -151,12 +152,26 @@ summarizer.py와 같은 `.env`의 `GEMINI_API_KEYS`/`GEMINI_MODEL`을 재사용�
 
 - **벡터 데이터**: `vectorizer.py`가 Gemini 임베딩 모델(`gemini-embedding-001`, 3072차원)로
   `mentions`/`policy_events`의 아직 벡터화되지 않은 항목을 임베딩해 각 테이블의 `embedding`
-  컬럼(JSON 배열)에 저장한다. summarizer.py와 같은 `.env`의 `GEMINI_API_KEYS`를 재사용하고,
-  여러 키 순차 failover도 동일하게 지원한다. "🧬 벡터화 진행" 버튼은 신규 게시물/네이버뉴스
-  수집과 같은 백그라운드 스레드 패턴(`start_background_vectorize`)으로 동작해 페이지를
-  벗어나거나 새로고침해도 계속 진행되고, 실행 이력은 `vector_run_logs` 테이블에 남는다.
-  **벡터 자체를 이용한 검색(코사인 유사도 등)과 AI AGENT 연동은 이번에는 다루지 않고 추후
-  과제로 남겨둔다** — 지금은 벡터를 만들어 저장하는 기능까지만 구현했다.
+  컬럼(JSON 배열, 원본 보관용)과 `sqlite-vec` 색인(`mention_vectors`/`policy_vectors`, vec0
+  가상 테이블, 실제 유사도 검색용)에 함께 저장한다. summarizer.py와 같은 `.env`의
+  `GEMINI_API_KEYS`를 재사용하고, 여러 키 순차 failover도 동일하게 지원한다. "🧬 벡터화 진행"
+  버튼은 신규 게시물/네이버뉴스 수집과 같은 백그라운드 스레드 패턴(`start_background_vectorize`)
+  으로 동작해 페이지를 벗어나거나 새로고침해도 계속 진행되고, 실행 이력은 `vector_run_logs`
+  테이블에 남는다. 색인 테이블이 나중에 추가되었거나 유실된 경우를 위해 매 벡터화 실행마다
+  `embedding` 컬럼엔 있지만 색인엔 없는 행을 자동 백필한다(`vectorizer.sync_vector_index`).
+- **AI AGENT 벡터 검색 연동**: 질문이 들어오면 `vectorizer.search_similar_mentions`/
+  `search_similar_policy_events`가 질문을 임베딩해 `mention_vectors`/`policy_vectors`에서
+  코사인 거리가 가까운 문서를 상위 N개(뉴스 5·정책 3) 찾는다. 이 결과를
+  `agent_chat.build_grounding_context()`로 텍스트 블록으로 만들어, 화면에 보이는 대화
+  히스토리에는 섞지 않고 **그 턴의 system_instruction에만** 근거 자료로 주입한다(매 호출마다
+  새 세션을 만드는 기존 구조 덕분에 턴마다 다른 검색 결과를 자연스럽게 반영). 관련 문서가
+  없으면(색인이 비어있거나 유사도가 낮으면) 예전처럼 일반 지식으로 답하고 사내 데이터 기반이
+  아니라는 점을 밝히도록 폴백한다.
+- **sqlite-vec 확장**: `db._connect()`가 매 연결마다 확장을 로드해서(`sqlite_vec.load`)
+  `mention_vectors`/`policy_vectors` 가상 테이블(`vec0`, 컬럼 차원 `db.VECTOR_DIM=3072`)을
+  쓸 수 있게 한다. vec0는 rowid 충돌에 `INSERT OR REPLACE`를 지원하지 않아 upsert는
+  DELETE 후 INSERT로 처리한다(`db._upsert_vector`). rowid를 `mentions.id`/`policy_events.id`와
+  그대로 맞춰서 JOIN으로 원본 행을 바로 가져온다.
 - **접속 로그**: `db.activity_log` 테이블에 접속 IP·화면·행위·상세내용을 남긴다. 페이지
   방문(전체 화면 공통, `app.py`), 뉴스 검색(검색어), AI 채팅 전송, PDF 생성, 관리자 작업
   (수집 실행/데이터 삭제/벡터화 실행)을 기록한다. 페이지 방문·검색은 Streamlit이 위젯
@@ -169,9 +184,10 @@ summarizer.py와 같은 `.env`의 `GEMINI_API_KEYS`/`GEMINI_MODEL`을 재사용�
 
 - Streamlit (`st.navigation(position="top")` 기반 멀티페이지, 오렌지 테마 커스텀 CSS)
 - SQLite (수집 데이터) / JSON (키워드·스케줄·접근 제어 설정)
+- sqlite-vec — SQLite 확장(vec0 가상 테이블)으로 임베딩 유사도 검색(AI AGENT 벡터 검색)
 - requests + BeautifulSoup / stdlib `xml.etree` (RSS) — 크롤링
 - Playwright(Chromium) — PDF 보고서 생성
-- google-genai (Gemini) — PDF 상위 5건 기사 요약, AI AGENT 대화, 뉴스·정책 벡터화
+- google-genai (Gemini) — PDF 상위 5건 기사 요약, AI AGENT 대화·벡터 검색, 뉴스·정책 벡터화
 - paramiko (SSH/SFTP) — 원격 서버 배포
 
 ## 로컬 실행
@@ -203,10 +219,10 @@ data.py             (레거시, 미사용) 과거 샘플 데이터 — 현재 �
 news_feed.py        mentions 원본 → 화면 표시용 가공 (카테고리 분류·점수·메달·이슈·브리핑, 채널 표시 필터)
 policy_feed.py      policy_events 원본 → 화면 표시용 가공 (정책 카테고리 분류·점수·메달·발표 추이)
 summarizer.py       PDF 상위 5건 전용 Gemini 기사 요약 (원문 있는 기사만, 결과는 DB에 캐싱)
-agent_chat.py       AI AGENT 페이지용 범용 Gemini 대화 (매 메시지마다 새 세션에 이력 주입)
-vectorizer.py       mentions/policy_events Gemini 임베딩 벡터화 + 백그라운드 실행/이력
+agent_chat.py       AI AGENT 페이지용 범용 Gemini 대화 (매 메시지마다 새 세션에 이력 주입 + 벡터 검색 근거 주입)
+vectorizer.py       mentions/policy_events Gemini 임베딩 벡터화(+sqlite-vec 색인) · 백그라운드 실행/이력 · 유사도 검색
 access_control.py    IP 화이트리스트 · 관리자 판별
-db.py               수집 데이터 SQLite 저장소 (WAL 모드) + 벡터/접속 로그 테이블
+db.py               수집 데이터 SQLite 저장소 (WAL 모드 + sqlite-vec 확장) + 벡터 색인/접속 로그 테이블
 cached_db.py        db.py 조회를 60초 TTL로 캐싱 (동시 접속·반복 상호작용 시 중복 조회 방지)
 report_pdf.py        PDF 보고서 카드덱 HTML 템플릿 + Playwright PDF 생성 (미리보기와 공유)
 collector.py         키워드×채널 수집 조율, 노이즈 필터링, 일회성 백필(run_backfill)
