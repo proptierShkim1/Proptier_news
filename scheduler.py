@@ -10,6 +10,7 @@ from pathlib import Path
 
 import collector
 import summarizer
+import vectorizer
 from utils import (
     load_collection_schedule,
     load_naver_news_collection_schedule,
@@ -22,10 +23,13 @@ _POLL_SECONDS = 30
 _POLICY_COLLECTION_DAYS = 3
 # PDF 상위 항목 AI 요약 미리 생성 주기 — 수집 스케줄과는 무관하게 별도로 돈다.
 _PDF_PRESUMMARY_INTERVAL_MINUTES = 5
+# 벡터화도 관리자가 "벡터화 진행"을 매번 누르지 않아도 되도록 별도 주기로 자동 실행한다.
+_AUTO_VECTORIZE_INTERVAL_MINUTES = 10
 _last_fired = ""
 _last_fired_policy = ""
 _last_fired_naver_news = ""
 _last_pdf_presummary: datetime | None = None
+_last_auto_vectorize: datetime | None = None
 _lock = threading.Lock()
 _started = False
 
@@ -123,6 +127,30 @@ def _tick_pdf_presummary() -> None:
         logger.exception("스케줄러(PDF 요약 미리 생성) 반복 실행 중 오류 발생")
 
 
+def _tick_auto_vectorize() -> None:
+    """새로 수집된 뉴스·정책을 관리자가 "벡터화 진행" 버튼을 매번 누르지 않아도 자동으로
+    벡터화한다. start_background_vectorize()가 이미 진행 중인 벡터화는 알아서 건너뛰므로
+    (모듈 레벨 lock+active_run_id), 이 tick은 그냥 일정 주기마다 "새로 돌 게 있는지"만
+    확인해서 백그라운드 스레드를 새로 띄운다 — 벡터화 자체가 오래 걸려도 스케줄러의 다른
+    tick을 막지 않는다."""
+    global _last_auto_vectorize
+    try:
+        now = datetime.now()
+        with _lock:
+            due = _last_auto_vectorize is None or (
+                now - _last_auto_vectorize >= timedelta(minutes=_AUTO_VECTORIZE_INTERVAL_MINUTES)
+            )
+        if due:
+            with _lock:
+                _last_auto_vectorize = now
+            if vectorizer.has_api_keys():
+                started_run_id = vectorizer.start_background_vectorize(trigger="자동")
+                if started_run_id:
+                    logger.info("자동 벡터화 시작 (run_id=%s)", started_run_id)
+    except Exception:
+        logger.exception("스케줄러(자동 벡터화) 반복 실행 중 오류 발생")
+
+
 def _tick() -> None:
     """스케줄러 한 사이클 분량의 로직. 신규 게시물/정부 정책/네이버뉴스 API는 각자
     독립된 스케줄로 체크한다."""
@@ -130,6 +158,7 @@ def _tick() -> None:
     _tick_policy()
     _tick_naver_news()
     _tick_pdf_presummary()
+    _tick_auto_vectorize()
 
 
 def _loop() -> None:

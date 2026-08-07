@@ -26,9 +26,11 @@ def _reset(monkeypatch):
     monkeypatch.setattr(scheduler, "_last_fired", "")
     monkeypatch.setattr(scheduler, "_last_fired_policy", "")
     monkeypatch.setattr(scheduler, "_last_fired_naver_news", "")
-    # 신규 게시물/정책/네이버뉴스 스케줄과 무관한 PDF 요약 미리 생성 tick은 실제 Gemini/DB를
-    # 건드리므로, 이 tick을 직접 테스트하는 케이스가 아니면 아무 일도 하지 않게 한다.
+    # 신규 게시물/정책/네이버뉴스 스케줄과 무관한 PDF 요약 미리 생성/자동 벡터화 tick은
+    # 실제 Gemini/DB를 건드리므로, 이 tick들을 직접 테스트하는 케이스가 아니면 아무 일도
+    # 하지 않게 한다.
     monkeypatch.setattr(scheduler, "_tick_pdf_presummary", lambda: None)
+    monkeypatch.setattr(scheduler, "_tick_auto_vectorize", lambda: None)
 
 
 def test_tick_new_posts_and_policy_fire_on_their_own_independent_schedules(monkeypatch):
@@ -221,5 +223,85 @@ def test_tick_pdf_presummary_swallows_exception(monkeypatch, caplog):
 
     with caplog.at_level("ERROR", logger="hana_p.scheduler"):
         scheduler._tick_pdf_presummary()
+
+    assert any("오류" in record.message for record in caplog.records)
+
+
+def test_tick_auto_vectorize_runs_immediately_on_first_call(monkeypatch):
+    monkeypatch.setattr(scheduler, "_last_auto_vectorize", None)
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+    monkeypatch.setattr(scheduler.vectorizer, "has_api_keys", lambda: True)
+    calls = []
+    monkeypatch.setattr(
+        scheduler.vectorizer, "start_background_vectorize",
+        lambda trigger: calls.append(trigger) or "run-1",
+    )
+
+    scheduler._tick_auto_vectorize()
+
+    assert calls == ["자동"]
+    assert scheduler._last_auto_vectorize == datetime(2026, 7, 16, 9, 0)
+
+
+def test_tick_auto_vectorize_does_not_run_again_before_interval_elapses(monkeypatch):
+    monkeypatch.setattr(scheduler, "_last_auto_vectorize", datetime(2026, 7, 16, 9, 0))
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 2))
+    monkeypatch.setattr(scheduler.vectorizer, "has_api_keys", lambda: True)
+    calls = []
+    monkeypatch.setattr(
+        scheduler.vectorizer, "start_background_vectorize", lambda trigger: calls.append(trigger),
+    )
+
+    scheduler._tick_auto_vectorize()
+
+    assert calls == []
+
+
+def test_tick_auto_vectorize_runs_again_after_interval_elapses(monkeypatch):
+    monkeypatch.setattr(
+        scheduler, "_last_auto_vectorize",
+        datetime(2026, 7, 16, 9, 0) - timedelta(minutes=scheduler._AUTO_VECTORIZE_INTERVAL_MINUTES),
+    )
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+    monkeypatch.setattr(scheduler.vectorizer, "has_api_keys", lambda: True)
+    calls = []
+    monkeypatch.setattr(
+        scheduler.vectorizer, "start_background_vectorize",
+        lambda trigger: calls.append(trigger) or "run-1",
+    )
+
+    scheduler._tick_auto_vectorize()
+
+    assert calls == ["자동"]
+
+
+def test_tick_auto_vectorize_skips_starting_a_run_when_no_api_keys(monkeypatch):
+    monkeypatch.setattr(scheduler, "_last_auto_vectorize", None)
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+    monkeypatch.setattr(scheduler.vectorizer, "has_api_keys", lambda: False)
+    calls = []
+    monkeypatch.setattr(
+        scheduler.vectorizer, "start_background_vectorize", lambda trigger: calls.append(trigger),
+    )
+
+    scheduler._tick_auto_vectorize()
+
+    assert calls == []
+    # due 판정 자체는 정상 처리되어 다음 주기까지 재시도하지 않는다.
+    assert scheduler._last_auto_vectorize == datetime(2026, 7, 16, 9, 0)
+
+
+def test_tick_auto_vectorize_swallows_exception(monkeypatch, caplog):
+    monkeypatch.setattr(scheduler, "_last_auto_vectorize", None)
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+    monkeypatch.setattr(scheduler.vectorizer, "has_api_keys", lambda: True)
+
+    def boom(trigger):
+        raise RuntimeError("vectorize boom")
+
+    monkeypatch.setattr(scheduler.vectorizer, "start_background_vectorize", boom)
+
+    with caplog.at_level("ERROR", logger="hana_p.scheduler"):
+        scheduler._tick_auto_vectorize()
 
     assert any("오류" in record.message for record in caplog.records)
