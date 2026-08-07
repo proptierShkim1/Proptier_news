@@ -734,6 +734,19 @@ def _render_pagination_controls(key_prefix: str, page: int, total_pages: int) ->
         st.rerun()
 
 
+def _escape_html_attr(text: str) -> str:
+    """조회 목록의 제목(외부에서 크롤링한, 신뢰할 수 없는 텍스트)을 title="..." 같은 HTML
+    속성 안에 넣기 전에 이스케이프한다. `&`를 가장 먼저 치환해야 뒤이어 만든 `&lt;` 등의
+    엔티티가 다시 이스케이프되지 않는다. 큰따옴표를 이스케이프하지 않으면 제목에 `"`가
+    포함된 기사가 속성값을 이탈해 임의 HTML/속성을 주입할 수 있었다."""
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
 def _match_type(brand: str, search_term: str) -> str:
     if not search_term:
         return "미상"
@@ -852,7 +865,7 @@ def _render_brand_lookup_tab():
             cols[3].markdown(str(row["브랜드"]))
             cols[4].markdown(str(row["채널"]))
             cols[5].markdown(str(row["구분"]))
-            title_text = str(row["제목"]).replace("<", "&lt;").replace(">", "&gt;")
+            title_text = _escape_html_attr(str(row["제목"]))
             cols[6].markdown(
                 f'<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" '
                 f'title="{title_text}">{title_text}</div>',
@@ -979,7 +992,7 @@ def _render_policy_lookup_tab():
             cols[1].markdown(str(row["수집처"]))
             cols[2].markdown(str(row["등록일"]))
             cols[3].markdown(str(row["분류"]))
-            title_text = str(row["제목"]).replace("<", "&lt;").replace(">", "&gt;")
+            title_text = _escape_html_attr(str(row["제목"]))
             cols[4].markdown(
                 f'<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" '
                 f'title="{title_text}">{title_text}</div>',
