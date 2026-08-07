@@ -64,6 +64,25 @@ def _persistent_tabs(labels: list, qp_name: str):
     return st.tabs(labels, default=default, key=key, on_change=_on_change)
 
 
+def _render_lazy_tabs(labels: list, qp_name: str, render_fns: list) -> None:
+    """_persistent_tabs로 탭 바를 그리되, 실제로 선택된 탭의 렌더 함수만 호출한다.
+    st.tabs()는 선택 여부와 무관하게 모든 with tab: 블록의 코드를 매번 실행하는데, 무거운
+    탭(예: 데이터 관리의 수천 건짜리 DataFrame 조회)이 섞여 있으면 다른 탭만 보려 해도
+    매번 같이 돌아가서 설정 화면 전체가 느려진다.
+
+    선택된 탭은 st.query_params가 아니라 st.tabs(key=...)가 채우는
+    st.session_state[key]로 판단한다 — 쿼리 파라미터는 on_change 콜백이 채우는데, 클릭과
+    쿼리 파라미터 갱신 사이에 몇 초씩 지연이 생겨(브라우저 주소창 반영 지연으로 추정) 그
+    사이 렌더에서는 어떤 탭도 활성 탭과 매치되지 않아 화면 전체가 비어 보이는 버그가
+    있었다. 위젯 자신의 session_state 값은 st.tabs() 호출 즉시 갱신되어 이 지연이 없다."""
+    tabs = _persistent_tabs(labels, qp_name)
+    active = st.session_state.get(f"_tabs_{qp_name}", labels[0])
+    for label, tab, render_fn in zip(labels, tabs, render_fns):
+        with tab:
+            if label == active:
+                render_fn()
+
+
 def _log_deploy(action: str, status: str, detail: str = ""):
     ip = st.session_state.get("_client_ip", "") or ""
     actor = name_for_ip(ip) or ip or "unknown"
@@ -666,15 +685,10 @@ def _render_policy_collection_tab():
 
 
 def _render_data_collection():
-    tab_existing, tab_naver_news, tab_policy = _persistent_tabs(
-        ["📰 신규 게시물", "📡 네이버뉴스 API", "🏛️ 정부 정책"], "dc_tab"
+    _render_lazy_tabs(
+        ["📰 신규 게시물", "📡 네이버뉴스 API", "🏛️ 정부 정책"], "dc_tab",
+        [_render_brand_collection_tab, _render_naver_news_collection_tab, _render_policy_collection_tab],
     )
-    with tab_existing:
-        _render_brand_collection_tab()
-    with tab_naver_news:
-        _render_naver_news_collection_tab()
-    with tab_policy:
-        _render_policy_collection_tab()
 
 
 # ── 데이터 관리(조회) ───────────────────────────────────────────────────────
@@ -1033,11 +1047,10 @@ def _render_channel_visibility():
 
 def _render_data_management():
     _render_channel_visibility()
-    tab_existing, tab_policy = _persistent_tabs(["📰 신규 게시물", "🏛️ 정부 정책"], "dm_tab")
-    with tab_existing:
-        _render_brand_lookup_tab()
-    with tab_policy:
-        _render_policy_lookup_tab()
+    _render_lazy_tabs(
+        ["📰 신규 게시물", "🏛️ 정부 정책"], "dm_tab",
+        [_render_brand_lookup_tab, _render_policy_lookup_tab],
+    )
 
 
 # ── 벡터 데이터 ────────────────────────────────────────────────────────────
@@ -1173,19 +1186,8 @@ def _render_activity_log_tab():
 
 def render():
     st.title("⚙️ 설정")
-
-    tab_access, tab_collect, tab_manage, tab_vector, tab_log, tab_deploy = _persistent_tabs(
-        ["🔐 접근 제어", "🔄 데이터 수집", "🗃 데이터 관리", "🧬 벡터 데이터", "📋 로그", "🚀 배포"], "main_tab"
+    _render_lazy_tabs(
+        ["🔐 접근 제어", "🔄 데이터 수집", "🗃 데이터 관리", "🧬 벡터 데이터", "📋 로그", "🚀 배포"], "main_tab",
+        [_render_access_control, _render_data_collection, _render_data_management,
+         _render_vector_data_tab, _render_activity_log_tab, _render_deploy],
     )
-    with tab_access:
-        _render_access_control()
-    with tab_collect:
-        _render_data_collection()
-    with tab_manage:
-        _render_data_management()
-    with tab_vector:
-        _render_vector_data_tab()
-    with tab_log:
-        _render_activity_log_tab()
-    with tab_deploy:
-        _render_deploy()
