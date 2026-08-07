@@ -66,7 +66,8 @@ DECK_CSS = """
   align-items:center; gap:4px; margin-left:auto; }
 .repcard .why { background:#fff8f0; border:1px solid #f5ddb8; border-radius:18px; padding:20px 24px;
   display:flex; gap:14px; flex:0 0 auto; margin-top:32px; }
-.repcard .why .bulb { font-size:22px; }
+.repcard .why .bulb { flex:0 0 auto; line-height:0; }
+.repcard .why .bulb svg { width:22px; height:22px; display:block; }
 .repcard .why p { font-size:19px; line-height:1.5; color:#5c4a2e; margin:0; }
 .repcard .foot { display:flex; justify-content:space-between; align-items:center; margin-top:18px;
   padding-top:16px; border-top:1px solid #eee; font-size:16px; color:#98a3a8; flex:0 0 auto; }
@@ -74,6 +75,18 @@ DECK_CSS = """
 .repcard .dots span { width:9px; height:9px; border-radius:50%; background:#e2e2e2; }
 .repcard .dots span.on { background:#FF8900; width:24px; border-radius:5px; }
 """
+
+
+# 배포 서버(Linux, Chromium 헤드리스)에는 색상 이모지 폰트가 없어서 \U0001F4A1(💡) 같은
+# 이모지가 깨진 글자로 나온다 — 로컬 Windows는 시스템 이모지 폰트가 있어서 눈에 안 띄었을 뿐.
+# 폰트에 의존하지 않는 인라인 SVG로 바꿔서 어떤 환경에서도 동일하게 렌더링되게 한다.
+_BULB_ICON_SVG = (
+    '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">'
+    '<path d="M12 2C8.13 2 5 5.13 5 9c0 2.42 1.23 4.53 3 5.79V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.21'
+    'c1.77-1.26 3-3.37 3-5.79 0-3.87-3.13-7-7-7z" fill="#FF8900"/>'
+    '<rect x="9" y="20" width="6" height="2" rx="1" fill="#5c4a2e"/>'
+    '</svg>'
+)
 
 
 def _dots_html(total, current, on_color_class="on"):
@@ -141,7 +154,7 @@ def _card_html(rank, item, total_pages):
           <div class="metatile"><div class="mt-label">카테고리</div><div class="mt-value">{', '.join(categories)}</div></div>
           <a class="metalink" href="{item['url']}" target="_blank">바로가기 ↗</a>
         </div>
-        <div class="why"><span class="bulb">\U0001F4A1</span><p>{item['decision'][0]}</p></div>
+        <div class="why"><span class="bulb">{_BULB_ICON_SVG}</span><p>{item['decision'][0]}</p></div>
         <div class="foot"><span>부동산AI뉴스봇</span><div class="dots">{_dots_html(total_pages, rank)}</div></div>
       </div>
     </div>
