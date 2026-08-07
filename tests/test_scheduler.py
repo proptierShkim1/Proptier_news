@@ -227,9 +227,10 @@ def test_tick_pdf_presummary_swallows_exception(monkeypatch, caplog):
     assert any("오류" in record.message for record in caplog.records)
 
 
-def test_tick_auto_vectorize_runs_immediately_on_first_call(monkeypatch):
-    monkeypatch.setattr(scheduler, "_last_auto_vectorize", None)
+def test_tick_auto_vectorize_fires_on_its_own_independent_schedule(monkeypatch):
+    monkeypatch.setattr(scheduler, "_last_fired_vectorize", "")
     _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+    monkeypatch.setattr(scheduler, "load_vector_collection_schedule", lambda: {"times": ["09:00"]})
     monkeypatch.setattr(scheduler.vectorizer, "has_api_keys", lambda: True)
     calls = []
     monkeypatch.setattr(
@@ -240,12 +241,13 @@ def test_tick_auto_vectorize_runs_immediately_on_first_call(monkeypatch):
     scheduler._tick_auto_vectorize()
 
     assert calls == ["자동"]
-    assert scheduler._last_auto_vectorize == datetime(2026, 7, 16, 9, 0)
+    assert scheduler._last_fired_vectorize == "2026-07-16 09:00"
 
 
-def test_tick_auto_vectorize_does_not_run_again_before_interval_elapses(monkeypatch):
-    monkeypatch.setattr(scheduler, "_last_auto_vectorize", datetime(2026, 7, 16, 9, 0))
-    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 2))
+def test_tick_auto_vectorize_does_not_fire_when_time_not_in_schedule(monkeypatch):
+    monkeypatch.setattr(scheduler, "_last_fired_vectorize", "")
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 1))
+    monkeypatch.setattr(scheduler, "load_vector_collection_schedule", lambda: {"times": ["09:00"]})
     monkeypatch.setattr(scheduler.vectorizer, "has_api_keys", lambda: True)
     calls = []
     monkeypatch.setattr(
@@ -257,12 +259,10 @@ def test_tick_auto_vectorize_does_not_run_again_before_interval_elapses(monkeypa
     assert calls == []
 
 
-def test_tick_auto_vectorize_runs_again_after_interval_elapses(monkeypatch):
-    monkeypatch.setattr(
-        scheduler, "_last_auto_vectorize",
-        datetime(2026, 7, 16, 9, 0) - timedelta(minutes=scheduler._AUTO_VECTORIZE_INTERVAL_MINUTES),
-    )
+def test_tick_auto_vectorize_does_not_fire_twice_for_same_minute(monkeypatch):
+    monkeypatch.setattr(scheduler, "_last_fired_vectorize", "")
     _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+    monkeypatch.setattr(scheduler, "load_vector_collection_schedule", lambda: {"times": ["09:00"]})
     monkeypatch.setattr(scheduler.vectorizer, "has_api_keys", lambda: True)
     calls = []
     monkeypatch.setattr(
@@ -271,13 +271,15 @@ def test_tick_auto_vectorize_runs_again_after_interval_elapses(monkeypatch):
     )
 
     scheduler._tick_auto_vectorize()
+    scheduler._tick_auto_vectorize()
 
-    assert calls == ["자동"]
+    assert len(calls) == 1
 
 
 def test_tick_auto_vectorize_skips_starting_a_run_when_no_api_keys(monkeypatch):
-    monkeypatch.setattr(scheduler, "_last_auto_vectorize", None)
+    monkeypatch.setattr(scheduler, "_last_fired_vectorize", "")
     _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+    monkeypatch.setattr(scheduler, "load_vector_collection_schedule", lambda: {"times": ["09:00"]})
     monkeypatch.setattr(scheduler.vectorizer, "has_api_keys", lambda: False)
     calls = []
     monkeypatch.setattr(
@@ -287,13 +289,15 @@ def test_tick_auto_vectorize_skips_starting_a_run_when_no_api_keys(monkeypatch):
     scheduler._tick_auto_vectorize()
 
     assert calls == []
-    # due 판정 자체는 정상 처리되어 다음 주기까지 재시도하지 않는다.
-    assert scheduler._last_auto_vectorize == datetime(2026, 7, 16, 9, 0)
+    # 스케줄 자체는 매칭되어 이번 분에 "발화"한 것으로 기록된다 — 다음 tick에서 다시
+    # 시도하지 않지만, 다음 등록 시각에는 정상적으로 다시 시도한다.
+    assert scheduler._last_fired_vectorize == "2026-07-16 09:00"
 
 
 def test_tick_auto_vectorize_swallows_exception(monkeypatch, caplog):
-    monkeypatch.setattr(scheduler, "_last_auto_vectorize", None)
+    monkeypatch.setattr(scheduler, "_last_fired_vectorize", "")
     _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+    monkeypatch.setattr(scheduler, "load_vector_collection_schedule", lambda: {"times": ["09:00"]})
     monkeypatch.setattr(scheduler.vectorizer, "has_api_keys", lambda: True)
 
     def boom(trigger):
@@ -304,4 +308,5 @@ def test_tick_auto_vectorize_swallows_exception(monkeypatch, caplog):
     with caplog.at_level("ERROR", logger="hana_p.scheduler"):
         scheduler._tick_auto_vectorize()
 
+    assert scheduler._last_fired_vectorize == "2026-07-16 09:00"
     assert any("오류" in record.message for record in caplog.records)

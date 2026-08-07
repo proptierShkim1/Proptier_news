@@ -15,6 +15,7 @@ from utils import (
     load_collection_schedule,
     load_naver_news_collection_schedule,
     load_policy_collection_schedule,
+    load_vector_collection_schedule,
 )
 
 _POLL_SECONDS = 30
@@ -23,13 +24,11 @@ _POLL_SECONDS = 30
 _POLICY_COLLECTION_DAYS = 3
 # PDF 상위 항목 AI 요약 미리 생성 주기 — 수집 스케줄과는 무관하게 별도로 돈다.
 _PDF_PRESUMMARY_INTERVAL_MINUTES = 5
-# 벡터화도 관리자가 "벡터화 진행"을 매번 누르지 않아도 되도록 별도 주기로 자동 실행한다.
-_AUTO_VECTORIZE_INTERVAL_MINUTES = 10
 _last_fired = ""
 _last_fired_policy = ""
 _last_fired_naver_news = ""
+_last_fired_vectorize = ""
 _last_pdf_presummary: datetime | None = None
-_last_auto_vectorize: datetime | None = None
 _lock = threading.Lock()
 _started = False
 
@@ -128,27 +127,26 @@ def _tick_pdf_presummary() -> None:
 
 
 def _tick_auto_vectorize() -> None:
-    """새로 수집된 뉴스·정책을 관리자가 "벡터화 진행" 버튼을 매번 누르지 않아도 자동으로
-    벡터화한다. start_background_vectorize()가 이미 진행 중인 벡터화는 알아서 건너뛰므로
-    (모듈 레벨 lock+active_run_id), 이 tick은 그냥 일정 주기마다 "새로 돌 게 있는지"만
-    확인해서 백그라운드 스레드를 새로 띄운다 — 벡터화 자체가 오래 걸려도 스케줄러의 다른
-    tick을 막지 않는다."""
-    global _last_auto_vectorize
+    """등록된 시각에 벡터화를 자동 실행한다 — 설정 → 벡터 데이터 탭에서 관리자가 직접
+    등록/관리하는 스케줄을 따르며, 신규 게시물/정책/네이버뉴스 API와 완전히 독립된
+    스케줄이다(다른 자동 수집이 하나도 등록 안 된 경우와 동일하게, 벡터화 시각도 등록
+    안 하면 자동 실행되지 않고 수동 "벡터화 진행" 버튼만 동작한다)."""
+    global _last_fired_vectorize
     try:
         now = datetime.now()
+        minute_key = now.strftime("%Y-%m-%d %H:%M")
         with _lock:
-            due = _last_auto_vectorize is None or (
-                now - _last_auto_vectorize >= timedelta(minutes=_AUTO_VECTORIZE_INTERVAL_MINUTES)
-            )
-        if due:
-            with _lock:
-                _last_auto_vectorize = now
-            if vectorizer.has_api_keys():
-                started_run_id = vectorizer.start_background_vectorize(trigger="자동")
-                if started_run_id:
-                    logger.info("자동 벡터화 시작 (run_id=%s)", started_run_id)
+            already_fired = minute_key == _last_fired_vectorize
+        if not already_fired:
+            schedules = load_vector_collection_schedule()["times"]
+            if schedule_matches_now(schedules, now):
+                with _lock:
+                    _last_fired_vectorize = minute_key
+                if vectorizer.has_api_keys():
+                    started_run_id = vectorizer.start_background_vectorize(trigger="자동")
+                    logger.info("벡터화 자동 실행 시작 (run_id=%s)", started_run_id)
     except Exception:
-        logger.exception("스케줄러(자동 벡터화) 반복 실행 중 오류 발생")
+        logger.exception("스케줄러(벡터화) 반복 실행 중 오류 발생")
 
 
 def _tick() -> None:

@@ -12,6 +12,7 @@ KEYWORDS_FILE = DATA_DIR / "keywords.json"
 COLLECTION_SCHEDULE_FILE = DATA_DIR / "collection_schedule.json"
 POLICY_COLLECTION_SCHEDULE_FILE = DATA_DIR / "policy_collection_schedule.json"
 NAVER_NEWS_COLLECTION_SCHEDULE_FILE = DATA_DIR / "naver_news_collection_schedule.json"
+VECTOR_COLLECTION_SCHEDULE_FILE = DATA_DIR / "vector_collection_schedule.json"
 CHANNEL_VISIBILITY_FILE = DATA_DIR / "channel_visibility.json"
 AGENT_CHAT_HISTORY_FILE = DATA_DIR / "agent_chat_history.json"
 ALL_MENTION_CHANNELS = ["네이버", "구글", "다음", "커뮤니티", "네이버뉴스API"]
@@ -87,6 +88,16 @@ def load_naver_news_collection_schedule() -> dict:
 
 def save_naver_news_collection_schedule(cfg: dict) -> None:
     save_json(NAVER_NEWS_COLLECTION_SCHEDULE_FILE, cfg)
+
+
+def load_vector_collection_schedule() -> dict:
+    cfg = load_json(VECTOR_COLLECTION_SCHEDULE_FILE, {"times": []})
+    cfg["times"] = _normalize_schedule_times(cfg.get("times", []))
+    return cfg
+
+
+def save_vector_collection_schedule(cfg: dict) -> None:
+    save_json(VECTOR_COLLECTION_SCHEDULE_FILE, cfg)
 
 
 def load_channel_visibility() -> list:

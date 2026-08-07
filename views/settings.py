@@ -21,11 +21,13 @@ from utils import (
     load_keywords,
     load_naver_news_collection_schedule,
     load_policy_collection_schedule,
+    load_vector_collection_schedule,
     save_channel_visibility,
     save_collection_schedule,
     save_keywords,
     save_naver_news_collection_schedule,
     save_policy_collection_schedule,
+    save_vector_collection_schedule,
 )
 
 ROOT = Path(__file__).parent.parent
@@ -1113,6 +1115,30 @@ def _render_vector_data_tab():
         st.metric("뉴스 색인 완료", f"{db.count_mention_vector_index():,}건")
     with c4:
         st.metric("정책 색인 완료", f"{db.count_policy_vector_index():,}건")
+
+    st.divider()
+    st.subheader("⏰ 벡터화 스케줄")
+    vector_sched_cfg = load_vector_collection_schedule()
+    vector_times_text = st.text_input(
+        "벡터화 시각 (/로 구분)", value="/".join(vector_sched_cfg["times"]),
+        placeholder="예: 09:00/13:00/17:00", key="vector_sched_times_text",
+    )
+    if st.button("💾 저장", key="vector_sched_save"):
+        tokens = [t.strip() for t in vector_times_text.split("/") if t.strip()]
+        invalid = [t for t in tokens if not _TIME_RE.match(t)]
+        if invalid:
+            st.error(f"HH:MM 형식이 아닌 시각이 있습니다: {', '.join(invalid)}")
+        else:
+            seen = []
+            for t in tokens:
+                if t not in seen:
+                    seen.append(t)
+            save_vector_collection_schedule({"times": seen})
+            st.rerun()
+    if vector_sched_cfg["times"]:
+        st.caption(f"등록된 시각: {', '.join(vector_sched_cfg['times'])}")
+    else:
+        st.caption("등록된 벡터화 시각이 없습니다 — 아래 '벡터화 진행' 버튼으로 수동 실행만 가능합니다.")
 
     st.divider()
     running_run_id = vectorizer.active_vectorize_run_id()
