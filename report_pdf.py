@@ -3,6 +3,8 @@ hana_p — PDF 보고서 카드덱 템플릿. 화면 미리보기(views/report.p
 이 모듈이 만드는 동일한 HTML/CSS 조각을 공유한다 (레이아웃 이중 관리 방지).
 """
 
+import hashlib
+import threading
 from datetime import datetime
 
 PAGE_PX = 1080
@@ -219,26 +221,46 @@ def generate_pdf_bytes(items, total_count=0, ai_count=0) -> bytes:
     return pdf_bytes
 
 
-_cache_key = None
-_cache_bytes = None
+# 캐시 슬롯 하나: None 또는 (key, pdf_bytes) 튜플. 튜플을 통째로 새로 만들어
+# 이 이름 하나에 대입하는 것은 GIL 하에서 원자적이므로, 다른 스레드가 읽는 도중에도
+# "일부만 갈아치워진" 상태(예: 새 키인데 옛 바이트)를 볼 수 없다 — key/bytes를 별도
+# 전역 변수 두 개로 나눠서 각각 대입하면 이 보장이 깨진다(아래 락이 필요한 이유이기도 함).
+_cache: tuple[str, bytes] | None = None
+_lock = threading.Lock()
 
 
 def get_or_generate_pdf_bytes(items, total_count=0, ai_count=0) -> bytes:
-    """generate_pdf_bytes()와 동일한 입력이면 마지막으로 만든 PDF 바이트를 그대로
-    돌려주고, 입력이 달라졌을 때만 다시 렌더링한다. 동시 접속자가 같은 시점엔 동일한
-    top5/집계를 보므로(이 페이지엔 사용자별 필터가 없음), 서버 프로세스 전체가 캐시
-    슬롯 하나를 공유해도 안전하다."""
-    global _cache_key, _cache_bytes
+    """캐시 키는 손으로 고른 필드 목록이 아니라 실제로 렌더링될 HTML
+    (build_deck_html(items, total_count, ai_count))의 SHA-256 해시다. 이렇게 하면
+    표지의 날짜 줄(datetime.now() 기준)이나 카드별 최근성 문구("최근 12시간 내
+    수집되어 신선도가 높습니다" vs "누적 수집 데이터 중 상위 신호로 선정되었습니다",
+    news_feed.build_news_items가 매긴다) 같은, 렌더러가 실제로 읽는 모든 필드를
+    자동으로 포함한다 — 나중에 렌더러가 새 필드를 읽게 되어도 캐시 키가 따라가지
+    못해 어제 날짜나 stale한 문구를 캐시가 그대로 돌려주는 일이 구조적으로 없다.
+    build_deck_html은 5개 항목에 대한 순수 문자열 포매팅이라 매 호출마다 다시
+    계산해도 비용은 무시할 수준이다 — 비싼 부분은 Chromium 렌더링(generate_pdf_bytes)뿐.
 
-    key = (
-        tuple((item.get("mention_id"), bool(item.get("summary"))) for item in items),
-        total_count,
-        ai_count,
-    )
-    if key == _cache_key and _cache_bytes is not None:
-        return _cache_bytes
+    캐시 미스는 module-level `_lock`으로 single-flight 처리한다: 콘텐츠가 같으면
+    (키가 같으면) 먼저 온 요청만 실제로 렌더링하고, 뒤따라온 동시 요청은 락을
+    기다렸다가 그 결과를 그대로 재사용한다 — 콜드 캐시에 N명이 동시에 접속해도
+    Chromium이 N번 뜨지 않는다. 락이 없다면, 콘텐츠가 다른(키가 다른) 두 동시
+    캐시미스가 인터리빙되어 `_cache`가 (key_B, bytes_A) 같은 잘못된 조합으로
+    영구히 오염될 수 있다 — "동시 캐시미스는 입력이 같으니 결과도 같아 무해하다"는
+    예전 가정은 새 수집 데이터가 들어와 top5/통계가 바뀌는 순간 깨지므로, 더블체크
+    락으로 이 경합 자체를 없앤다."""
+    global _cache
 
-    pdf_bytes = generate_pdf_bytes(items, total_count, ai_count)
-    _cache_key = key
-    _cache_bytes = pdf_bytes
-    return pdf_bytes
+    key = hashlib.sha256(build_deck_html(items, total_count, ai_count).encode()).hexdigest()
+
+    cached = _cache
+    if cached is not None and cached[0] == key:
+        return cached[1]
+
+    with _lock:
+        cached = _cache
+        if cached is not None and cached[0] == key:
+            return cached[1]
+
+        pdf_bytes = generate_pdf_bytes(items, total_count, ai_count)
+        _cache = (key, pdf_bytes)
+        return pdf_bytes

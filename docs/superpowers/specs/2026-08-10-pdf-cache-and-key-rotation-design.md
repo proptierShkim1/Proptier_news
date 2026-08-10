@@ -19,11 +19,20 @@
 ## 구현 범위
 
 ### 1. `report_pdf.py` — 콘텐츠 기반 PDF 캐시
-- 모듈 전역에 캐시 슬롯 하나만 둔다: `_cache_key: tuple | None`, `_cache_bytes: bytes | None`
-  (락 없음 — 동시 캐시미스 시 드물게 중복 생성될 수 있으나 입력이 같으므로 결과도 같아
-  무해하다고 판단, 범위 밖으로 둠).
-- 캐시 키는 `generate_pdf_bytes()`에 실제로 들어가는 입력만으로 만든다:
-  `tuple((item["mention_id"], bool(item.get("summary"))) for item in items) + (total_count, ai_count)`.
+- 모듈 전역에 캐시 슬롯 하나만 둔다: `_cache: tuple[str, bytes] | None` (키와 바이트를
+  한 튜플로 묶어 한 번에 대입한다 — 아래 "왜 락이 필요한가" 참고).
+- **캐시 키는 손으로 고른 필드 목록이 아니라 실제로 렌더링되는 HTML의 해시다**:
+  `hashlib.sha256(build_deck_html(items, total_count, ai_count).encode()).hexdigest()`.
+  최초 구현은 `(mention_id, bool(summary))` + `total_count`/`ai_count`처럼 "PDF에 영향을
+  주는 필드"를 손으로 골라 키를 만들었는데, 이 방식은 표지의 날짜 줄(`datetime.now()`
+  기준)과 카드별 최근성 문구(`news_feed.build_news_items()`가 12시간 컷오프로 매기는
+  "최근 12시간 내 수집되어 신선도가 높습니다" vs "누적 수집 데이터 중 상위 신호로
+  선정되었습니다")를 캐치하지 못했다 — 둘 다 렌더링 결과에 영향을 주지만 손으로 고른
+  필드 목록에는 없어서, items/total_count/ai_count가 완전히 같아도 캐시가 어제 날짜나
+  stale한 문구를 그대로 돌려줄 수 있었다. 렌더러가 실제로 만든 HTML을 해시하면 렌더러가
+  읽는 모든 필드가 구조적으로 다 들어가므로 이런 drift가 원천적으로 불가능하다.
+  `build_deck_html`은 5개 항목에 대한 순수 문자열 포매팅이라 매 호출마다 다시 계산해도
+  비용은 무시할 수준— 비싼 부분은 Chromium 렌더링(`generate_pdf_bytes`)뿐이다.
 - 새 함수 `get_or_generate_pdf_bytes(items, total_count=0, ai_count=0) -> bytes`:
   키가 이전과 같고 캐시된 바이트가 있으면 그대로 반환, 다르면 `generate_pdf_bytes()`를
   호출해 결과를 캐시에 저장한 뒤 반환.
@@ -31,9 +40,24 @@
   `get_or_generate_pdf_bytes`를 호출하도록 한 줄 교체. 그 외 로직(스피너, 에러 처리,
   세션 상태 저장)은 변경 없음.
 - 명시적 invalidation 호출은 어디에도 추가하지 않는다 — `cached_db`가 60초 TTL로 이미
-  새 수집 데이터를 반영하므로, 새 데이터가 top5/total_count/ai_count를 바꾸면 캐시 키가
-  자연히 달라져 재생성된다. `collector.py`/`scheduler.py`에 캐시 지식을 결합시키지 않는
-  기존 원칙(2026-08-06 성능 개선 때 정한 것)과 일치.
+  새 수집 데이터를 반영하므로, 새 데이터가 top5/total_count/ai_count를 바꾸면 렌더링된
+  HTML이 자연히 달라져 캐시 키도 달라져 재생성된다. `collector.py`/`scheduler.py`에
+  캐시 지식을 결합시키지 않는 기존 원칙(2026-08-06 성능 개선 때 정한 것)과 일치.
+- **module-level `threading.Lock()`으로 single-flight 처리한다** — 최초 설계는 "락
+  없음: 동시 캐시미스 시 드물게 중복 생성될 수 있으나 입력이 같으므로 결과도 같아
+  무해하다"고 판단해 범위 밖으로 뒀는데, 이 판단은 캐시 상태를 `_cache_key`/
+  `_cache_bytes` 두 개의 별도 전역 변수로 나눠 쓰던 구현의 버그를 놓치고 있었다: 두
+  스레드가 서로 *다른* 키로 동시에 캐시미스를 내면(예: 하나는 새 수집 데이터가 반영된
+  요청, 하나는 그 직전 데이터로 이미 진행 중이던 요청) `_cache_key = key`와
+  `_cache_bytes = pdf_bytes`라는 두 번의 대입이 인터리빙될 수 있어 캐시가
+  `(key_B, bytes_A)`처럼 서로 안 맞는 조합으로 굳어버릴 수 있었다 — 이후 요청은 이
+  틀린 조합이 데이터가 다시 바뀔 때까지 계속 캐시 히트로 서빙된다. "동시 캐시미스는
+  입력이 같으니 무해하다"는 전제 자체가 "입력이 다를 수도 있다"는 경우를 놓친 것.
+  이번 라운드에서 (a) 캐시 슬롯을 `_cache = (key, pdf_bytes)` 튜플 하나로 합쳐 한 번의
+  대입으로 원자적으로 갈아치우게 하고, (b) 캐시미스 시 더블체크 락(double-checked
+  locking)으로 콜드 캐시에 동시에 들어온 같은 키의 요청들이 Chromium을 한 번만 띄우고
+  결과를 공유하게 했다. 덕분에 캐시 오염 경합이 사라지는 동시에, N명이 동시에 콜드
+  캐시를 때려도 Chromium 프로세스가 N번 뜨는 낭비도 함께 없어졌다.
 
 ### 2. `summarizer.py` / `vectorizer.py` — 키 순서 랜덤화
 - 두 파일의 `_load_api_keys()`를 리스트 생성 후 `random.shuffle()`로 섞어서 반환하도록
