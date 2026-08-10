@@ -10,6 +10,7 @@ search_similar_mentions()/search_similar_policy_events()로 질의 텍스트와 
 
 import json
 import os
+import random
 import threading
 import uuid
 from datetime import datetime
@@ -28,7 +29,9 @@ DEFAULT_LIMIT_PER_SOURCE = 200
 
 def _load_api_keys() -> list[str]:
     raw = os.getenv("GEMINI_API_KEYS", "")
-    return [k.strip() for k in raw.split(",") if k.strip()]
+    keys = [k.strip() for k in raw.split(",") if k.strip()]
+    random.shuffle(keys)
+    return keys
 
 
 def has_api_keys() -> bool:
