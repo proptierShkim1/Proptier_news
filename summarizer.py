@@ -7,6 +7,7 @@ GEMINI_API_KEYS 여러 키 순차 시도, GEMINI_MODEL로 모델 지정)을 그�
 """
 
 import os
+import random
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -20,7 +21,9 @@ SUMMARY_LEN = 400
 
 def _load_api_keys() -> list[str]:
     raw = os.getenv("GEMINI_API_KEYS", "")
-    return [k.strip() for k in raw.split(",") if k.strip()]
+    keys = [k.strip() for k in raw.split(",") if k.strip()]
+    random.shuffle(keys)
+    return keys
 
 
 def _model_name() -> str:

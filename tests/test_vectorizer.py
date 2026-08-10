@@ -191,3 +191,19 @@ def test_vectorize_mentions_updates_progress_incrementally():
     # 두 번째 항목을 시작할 때는 1/2까지 갱신되어 있어야 한다(매 건 처리 후 갱신).
     assert seen_progress == [None, {"done": 1, "total": 2}]
     assert vectorizer.get_vectorize_progress("run-x") == {"mentions": {"done": 2, "total": 2}}
+
+
+def test_load_api_keys_returns_all_keys_regardless_of_order(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEYS", "key1,key2,key3")
+
+    result = vectorizer._load_api_keys()
+
+    assert sorted(result) == ["key1", "key2", "key3"]
+
+
+def test_load_api_keys_shuffles_order_across_calls(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEYS", "key1,key2,key3,key4,key5,key6,key7,key8")
+
+    orders = {tuple(vectorizer._load_api_keys()) for _ in range(20)}
+
+    assert len(orders) > 1

@@ -5,7 +5,7 @@ import db
 import news_feed
 import summarizer
 import theme
-from report_pdf import build_deck_html, generate_pdf_bytes
+from report_pdf import build_deck_html, get_or_generate_pdf_bytes
 
 
 def _ensure_pdf_summaries(items: list[dict]) -> None:
@@ -42,7 +42,7 @@ def render():
             db.log_activity(st.session_state.get("_client_ip", ""), "PDF 보고서", "PDF 생성")
             with st.spinner("PDF 생성 중... (Chromium 렌더링, 수 초 소요)"):
                 try:
-                    st.session_state["report_pdf_bytes"] = generate_pdf_bytes(top5, total_count, ai_count)
+                    st.session_state["report_pdf_bytes"] = get_or_generate_pdf_bytes(top5, total_count, ai_count)
                 except Exception as e:
                     st.session_state["report_pdf_bytes"] = None
                     st.error(f"PDF 생성 실패: {e}")
