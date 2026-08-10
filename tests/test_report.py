@@ -29,3 +29,10 @@ def test_ensure_pdf_summaries_skips_cache_clear_when_nothing_updated():
         report._ensure_pdf_summaries(items)
 
     mock_clear.assert_not_called()
+
+
+def test_report_view_wires_pdf_button_to_cache_aware_generator():
+    from report_pdf import get_or_generate_pdf_bytes
+
+    assert report.get_or_generate_pdf_bytes is get_or_generate_pdf_bytes
+    assert not hasattr(report, "generate_pdf_bytes")
