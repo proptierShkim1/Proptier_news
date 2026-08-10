@@ -127,3 +127,19 @@ def test_presummarize_top_pdf_items_counts_only_newly_summarized_items():
     mock_summarize.assert_called_once_with("첫번째", "원문1")
     mock_update.assert_called_once_with(1, "새 요약")
     assert updated_count == 1
+
+
+def test_load_api_keys_returns_all_keys_regardless_of_order(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEYS", "key1,key2,key3")
+
+    result = summarizer._load_api_keys()
+
+    assert sorted(result) == ["key1", "key2", "key3"]
+
+
+def test_load_api_keys_shuffles_order_across_calls(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEYS", "key1,key2,key3,key4,key5,key6,key7,key8")
+
+    orders = {tuple(summarizer._load_api_keys()) for _ in range(20)}
+
+    assert len(orders) > 1
