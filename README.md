@@ -90,7 +90,9 @@
   `app.py`에서 `theme.inject()` 직후 전역으로 한 번만 주입한다 — `st.markdown` 안에 `<style>` 태그를
   직접 넣으면 태그 내용이 본문에 텍스트로 노출되는 Streamlit 특성이 있어 이렇게 분리했다
 - **PDF 생성**: `generate_pdf_bytes()`가 Playwright(Chromium 헤드리스)로 같은 HTML을 렌더링해
-  `page.pdf()`로 바이트를 만들고, `st.download_button`으로 내려준다
+  `page.pdf()`로 바이트를 만들고, `st.download_button`으로 내려준다. `views/report.py`는 이
+  함수를 직접 호출하지 않고 캐시를 앞에 둔 `get_or_generate_pdf_bytes()`를 호출한다 — 자세한
+  내용은 "성능 · 동시 접속" 섹션 참고
 - **Windows 전용 이슈**: Streamlit 서버(Tornado)가 프로세스 전역 asyncio 정책을 `SelectorEventLoop`로
   강제해두는데, Playwright 동기 API는 브라우저를 서브프로세스로 띄우려면 `ProactorEventLoop`가 필요하다
   (`SelectorEventLoop`는 Windows에서 서브프로세스 생성 미지원 → `NotImplementedError`). `generate_pdf_bytes()`
@@ -102,7 +104,8 @@
 - **AI 요약(Gemini)**: 상세 카드의 핵심 요약(`gist`)은 PDF에 실제로 나오는 상위 5건에 한해서만
   Gemini로 생성한다 — 전체 수집 기사를 대상으로 하면 대부분 PDF에 나오지도 않을 항목까지
   호출하는 낭비가 생기기 때문. `summarizer.py`가 `.env`의 `GEMINI_API_KEYS`(콤마로 구분한
-  키 목록, 한 키 실패 시 다음 키로 자동 failover)와 `GEMINI_MODEL`(기본 `gemini-2.5-flash`)을
+  키 목록, 매 호출마다 순서를 랜덤으로 섞은 뒤 앞에서부터 시도하다 실패하면 다음 키로
+  failover — 이유는 "성능 · 동시 접속" 참고)와 `GEMINI_MODEL`(기본 `gemini-2.5-flash`)을
   사용하며, 원문(`content`)이 실제로 수집된 기사만 대상으로 한다(제목·짧은 스니펫만 있는 기사는
   근거 부족으로 요약하지 않고 기존 발췌 방식을 그대로 씀). 생성된 요약은 `mentions.summary`
   컬럼에 저장되어 같은 기사를 다시 요약하지 않는다 — `views/report.py`의 `_ensure_pdf_summaries()`가
@@ -153,6 +156,24 @@ summarizer.py와 같은 `.env`의 `GEMINI_API_KEYS`/`GEMINI_MODEL`을 재사용�
   분류하던 걸 캐싱으로 줄였다(렌더링 한 번에 최대 4배 중복 계산).
 - **PDF AI 요약도 같은 캐시 무효화 원칙을 따른다** (`views/report.py`) — 새로 요약을 만들면
   `cached_db`도 함께 비워, 60초 안에 다른 사용자가 같은 항목을 중복 요약 호출하는 걸 줄인다.
+- **PDF 생성 콘텐츠 캐시 + single-flight 락** (`report_pdf.py`의 `get_or_generate_pdf_bytes()`) —
+  "PDF 생성"을 누르면 매번 Playwright로 Chromium을 새로 띄웠다. 이 페이지엔 날짜·채널 필터가
+  없어 같은 시점엔 모든 사용자가 동일한 top5를 보므로, 동시에 여러 명이 누르면 똑같은 내용을
+  위해 크로미움을 중복으로 띄우는 낭비가 생긴다. 캐시 키는 손으로 고른 필드가 아니라 실제로
+  렌더링되는 `build_deck_html()` 결과의 SHA-256 해시다 — 표지의 날짜(`datetime.now()`)나
+  카드별 최신성 문구(12시간 컷오프로 바뀌는 문구)처럼 렌더러가 읽는 모든 필드가 구조적으로
+  키에 반영되어, top5/집계가 같아도 날짜가 바뀌면 자동으로 재생성된다. 모듈 전역 캐시 슬롯
+  하나(`_cache: tuple[str, bytes] | None`)를 서버 프로세스 전체가 공유하며, `threading.Lock()`
+  기반 double-checked locking으로 콜드 캐시에 동시에 들어온 요청들이 Chromium을 한 번만
+  띄우고 결과를 나눠 받는다. `collector.py`/`scheduler.py`에는 캐시 무효화 호출을 추가하지
+  않았다 — `cached_db`가 60초 TTL로 이미 새 데이터를 반영하므로, 새 데이터가 렌더링 결과를
+  바꾸면 해시 키가 자연히 달라져 재생성된다(아래 캐시 무효화 원칙과 동일).
+- **Gemini API 키 시도 순서 랜덤화** (`summarizer.py`/`vectorizer.py`의 `_load_api_keys()`) —
+  기존엔 `GEMINI_API_KEYS`를 항상 같은 순서로 반환해서, 동시 요청이 몰리면 다들 1번 키부터
+  두드려 그 키의 분당 한도에 먼저 걸리고 나서야 순차로 다음 키로 넘어가는 지연이 쌓였다.
+  `_load_api_keys()`가 반환 직전에 `random.shuffle()`로 순서를 섞어, 매 호출마다 시도 순서가
+  달라진다(호출부의 `for key in keys` failover 로직은 그대로). AI AGENT 채팅(`agent_chat.py`)도
+  `summarizer._load_api_keys()`를 그대로 재사용하므로 코드 변경 없이 같은 효과를 받는다.
 - **설정 화면 탭 전환 시 선택 안 된 탭은 렌더링 건너뛰기** (`views/settings.py`의
   `_render_lazy_tabs`) — `st.tabs()`는 선택 여부와 무관하게 모든 `with tab:` 블록을 매번
   실행한다. "데이터 관리"처럼 수천 건짜리 DataFrame을 조회하는 무거운 탭이 섞여 있으면
@@ -173,7 +194,8 @@ summarizer.py와 같은 `.env`의 `GEMINI_API_KEYS`/`GEMINI_MODEL`을 재사용�
   `mentions`/`policy_events`의 아직 벡터화되지 않은 항목을 임베딩해 각 테이블의 `embedding`
   컬럼(JSON 배열, 원본 보관용)과 `sqlite-vec` 색인(`mention_vectors`/`policy_vectors`, vec0
   가상 테이블, 실제 유사도 검색용)에 함께 저장한다. summarizer.py와 같은 `.env`의
-  `GEMINI_API_KEYS`를 재사용하고, 여러 키 순차 failover도 동일하게 지원한다. "🧬 벡터화 진행"
+  `GEMINI_API_KEYS`를 재사용하고, 매 호출마다 순서를 랜덤으로 섞은 뒤 시도하는 failover도
+  동일하게 지원한다("성능 · 동시 접속" 참고). "🧬 벡터화 진행"
   버튼은 신규 게시물/네이버뉴스 수집과 같은 백그라운드 스레드 패턴(`start_background_vectorize`)
   으로 동작해 페이지를 벗어나거나 새로고침해도 계속 진행되고, 실행 이력은 `vector_run_logs`
   테이블에 남는다. 색인 테이블이 나중에 추가되었거나 유실된 경우를 위해 매 벡터화 실행마다
