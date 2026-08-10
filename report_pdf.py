@@ -217,3 +217,28 @@ def generate_pdf_bytes(items, total_count=0, ai_count=0) -> bytes:
         if old_policy is not None:
             asyncio.set_event_loop_policy(old_policy)
     return pdf_bytes
+
+
+_cache_key = None
+_cache_bytes = None
+
+
+def get_or_generate_pdf_bytes(items, total_count=0, ai_count=0) -> bytes:
+    """generate_pdf_bytes()와 동일한 입력이면 마지막으로 만든 PDF 바이트를 그대로
+    돌려주고, 입력이 달라졌을 때만 다시 렌더링한다. 동시 접속자가 같은 시점엔 동일한
+    top5/집계를 보므로(이 페이지엔 사용자별 필터가 없음), 서버 프로세스 전체가 캐시
+    슬롯 하나를 공유해도 안전하다."""
+    global _cache_key, _cache_bytes
+
+    key = (
+        tuple((item.get("mention_id"), bool(item.get("summary"))) for item in items),
+        total_count,
+        ai_count,
+    )
+    if key == _cache_key and _cache_bytes is not None:
+        return _cache_bytes
+
+    pdf_bytes = generate_pdf_bytes(items, total_count, ai_count)
+    _cache_key = key
+    _cache_bytes = pdf_bytes
+    return pdf_bytes

@@ -46,3 +46,54 @@ def test_card_shows_shortcut_link_to_article_url():
     assert 'class="metalink"' in html
     assert 'href="https://example.com/article/123"' in html
     assert "바로가기" in html
+
+
+from unittest.mock import patch
+
+
+def _item_with_id(mention_id, summary=""):
+    item = _item("제목")
+    item["mention_id"] = mention_id
+    item["summary"] = summary
+    return item
+
+
+def test_get_or_generate_pdf_bytes_returns_cached_bytes_for_same_inputs():
+    report_pdf._cache_key = None
+    report_pdf._cache_bytes = None
+    items = [_item_with_id(1, "요약1")]
+
+    with patch.object(report_pdf, "generate_pdf_bytes", return_value=b"pdf-bytes") as mock_gen:
+        first = report_pdf.get_or_generate_pdf_bytes(items, total_count=10, ai_count=2)
+        second = report_pdf.get_or_generate_pdf_bytes(items, total_count=10, ai_count=2)
+
+    assert first == b"pdf-bytes"
+    assert second == b"pdf-bytes"
+    mock_gen.assert_called_once_with(items, 10, 2)
+
+
+def test_get_or_generate_pdf_bytes_regenerates_when_items_change():
+    report_pdf._cache_key = None
+    report_pdf._cache_bytes = None
+    items_v1 = [_item_with_id(1, "")]
+    items_v2 = [_item_with_id(1, "요약 생김")]
+
+    with patch.object(report_pdf, "generate_pdf_bytes", side_effect=[b"v1", b"v2"]) as mock_gen:
+        first = report_pdf.get_or_generate_pdf_bytes(items_v1, total_count=10, ai_count=2)
+        second = report_pdf.get_or_generate_pdf_bytes(items_v2, total_count=10, ai_count=2)
+
+    assert first == b"v1"
+    assert second == b"v2"
+    assert mock_gen.call_count == 2
+
+
+def test_get_or_generate_pdf_bytes_regenerates_when_total_count_changes():
+    report_pdf._cache_key = None
+    report_pdf._cache_bytes = None
+    items = [_item_with_id(1, "요약1")]
+
+    with patch.object(report_pdf, "generate_pdf_bytes", side_effect=[b"v1", b"v2"]) as mock_gen:
+        report_pdf.get_or_generate_pdf_bytes(items, total_count=10, ai_count=2)
+        report_pdf.get_or_generate_pdf_bytes(items, total_count=11, ai_count=2)
+
+    assert mock_gen.call_count == 2
