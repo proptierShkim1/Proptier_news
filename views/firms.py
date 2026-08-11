@@ -5,8 +5,27 @@ import streamlit as st
 import cached_db
 import news_feed
 import theme
+from utils import escape_html
 
 _PERIOD_DAYS = {"누적 전체": None, "최근 1년": 365, "최근 1개월": 30, "최근 1주": 7}
+
+
+def _issue_html(iss):
+    badge = '<span class="iss-live">진행중</span>' if iss["live"] else f'<span class="iss-done">{iss["date"][5:]}</span>'
+    articles_html = "".join(
+        f'<li><span class="tl-meta">{escape_html(d)}</span><a href="{escape_html(u)}" target="_blank">{escape_html(t)}</a></li>'
+        for d, t, u in iss["articles"]
+    )
+    return f"""
+    <details class="iss">
+      <summary>
+        <span class="iss-cat" style="background:{iss['cat_bg']};color:{iss['cat_fg']}">{iss['cat']}</span>
+        <span class="iss-title">{escape_html(iss['title'])}</span>
+        <span class="iss-meta">{escape_html(iss.get('firm', ''))} · 기사 {iss['count']:,}건 · {iss['date']}</span>{badge}
+      </summary>
+      <ul class="iss-arts">{articles_html}</ul>
+    </details>
+    """
 
 
 def _issue_date(iss):
@@ -87,20 +106,6 @@ def render():
     if not filtered:
         st.info("조건에 맞는 이슈가 없습니다.")
     for iss in filtered[:news_feed.DISPLAY_LIMIT]:
-        badge = '<span class="iss-live">진행중</span>' if iss["live"] else f'<span class="iss-done">{iss["date"][5:]}</span>'
-        articles_html = "".join(
-            f'<li><span class="tl-meta">{d}</span><a href="{u}" target="_blank">{t}</a></li>'
-            for d, t, u in iss["articles"]
-        )
-        st.markdown(f"""
-        <details class="iss">
-          <summary>
-            <span class="iss-cat" style="background:{iss['cat_bg']};color:{iss['cat_fg']}">{iss['cat']}</span>
-            <span class="iss-title">{iss['title']}</span>
-            <span class="iss-meta">{iss.get('firm', '')} · 기사 {iss['count']:,}건 · {iss['date']}</span>{badge}
-          </summary>
-          <ul class="iss-arts">{articles_html}</ul>
-        </details>
-        """, unsafe_allow_html=True)
+        st.markdown(_issue_html(iss), unsafe_allow_html=True)
 
     theme.footer("실제 수집 데이터(mentions) 기반 · 이슈는 건별 카드(사건 클러스터링 없음)")

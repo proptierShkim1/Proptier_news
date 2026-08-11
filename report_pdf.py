@@ -7,6 +7,8 @@ import hashlib
 import threading
 from datetime import datetime
 
+from utils import escape_html
+
 PAGE_PX = 1080
 RANK_COLORS = ["#d4a447", "#9aa7ad", "#c9824c", "#FF8900", "#e67600"]
 
@@ -147,16 +149,16 @@ def _card_html(rank, item, total_pages):
           </div>
           <div class="datepill">{item['meta'].split('·')[0].replace(chr(0x1F552), '').strip()}</div>
         </div>
-        <h2>{item['title']}</h2>
+        <h2>{escape_html(item['title'])}</h2>
         <div class="rule"></div>
-        <div class="gist"><span class="ck">✓</span><span>{gist_text}</span></div>
+        <div class="gist"><span class="ck">✓</span><span>{escape_html(gist_text)}</span></div>
         <div class="metagrid">
-          <div class="metatile"><div class="mt-label">브랜드</div><div class="mt-value">{item.get('firm') or '-'}</div></div>
-          <div class="metatile"><div class="mt-label">채널</div><div class="mt-value">{channel}</div></div>
-          <div class="metatile"><div class="mt-label">카테고리</div><div class="mt-value">{', '.join(categories)}</div></div>
-          <a class="metalink" href="{item['url']}" target="_blank">바로가기 ↗</a>
+          <div class="metatile"><div class="mt-label">브랜드</div><div class="mt-value">{escape_html(item.get('firm') or '-')}</div></div>
+          <div class="metatile"><div class="mt-label">채널</div><div class="mt-value">{escape_html(channel)}</div></div>
+          <div class="metatile"><div class="mt-label">카테고리</div><div class="mt-value">{escape_html(', '.join(categories))}</div></div>
+          <a class="metalink" href="{escape_html(item['url'])}" target="_blank">바로가기 ↗</a>
         </div>
-        <div class="why"><span class="bulb">{_BULB_ICON_SVG}</span><p>{item['decision'][0]}</p></div>
+        <div class="why"><span class="bulb">{_BULB_ICON_SVG}</span><p>{escape_html(item['decision'][0])}</p></div>
         <div class="foot"><span>부동산AI뉴스봇</span><div class="dots">{_dots_html(total_pages, rank)}</div></div>
       </div>
     </div>

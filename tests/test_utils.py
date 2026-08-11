@@ -2,6 +2,7 @@ import json
 from datetime import datetime
 
 from utils import (
+    escape_html,
     load_channel_visibility,
     load_collection_schedule,
     load_naver_news_collection_schedule,
@@ -15,6 +16,18 @@ from utils import (
     save_vector_collection_schedule,
 )
 import utils
+
+
+def test_escape_html_escapes_script_tags():
+    assert escape_html("<script>alert(1)</script>") == "&lt;script&gt;alert(1)&lt;/script&gt;"
+
+
+def test_escape_html_escapes_double_quotes():
+    assert escape_html('제목 "인용문" 포함') == "제목 &quot;인용문&quot; 포함"
+
+
+def test_escape_html_escapes_ampersand_before_other_entities():
+    assert escape_html("A & B < C") == "A &amp; B &lt; C"
 
 
 def test_load_policy_collection_schedule_defaults_when_missing(tmp_path, monkeypatch):

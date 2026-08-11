@@ -2,6 +2,8 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+from utils import escape_html
+
 CSS = """
 <style>
 :root{
@@ -212,33 +214,41 @@ def bar_chart(data: dict, height: int = 160, color: str = "#FF8900"):
     st.altair_chart(chart, use_container_width=True)
 
 
-def news_card(item, rank_display, top_class=""):
-    desc_html = "".join(f"<li>{d}</li>" for d in item["desc"])
-    decision_html = "".join(f"<li>{d}</li>" for d in item["decision"])
-    st.markdown(f"""
+def _news_card_html(item, rank_display, top_class=""):
+    desc_html = "".join(f"<li>{escape_html(d)}</li>" for d in item["desc"])
+    decision_html = "".join(f"<li>{escape_html(d)}</li>" for d in item["decision"])
+    return f"""
     <div class="sl-item {top_class}">
       <div class="sl-signal">{item['signal']}</div>
       <div class="sl-head"><span class="sl-rank">{rank_display}</span>
-        <a class="sl-title" href="{item['url']}" target="_blank">{item['title']}</a>
+        <a class="sl-title" href="{escape_html(item['url'])}" target="_blank">{escape_html(item['title'])}</a>
         <span class="sl-score">점수 {item['score']}</span></div>
       <ul class="sl-desc">{desc_html}</ul>
       <div class="insight"><div class="insight-title">DECISION POINT · 의사결정 포인트</div>
         <ul>{decision_html}</ul></div>
-      <div class="sl-meta">{item['meta']}</div>
+      <div class="sl-meta">{escape_html(item['meta'])}</div>
     </div>
-    """, unsafe_allow_html=True)
+    """
 
 
-def policy_signal_card(item, rank_display, top_class=""):
-    st.markdown(f"""
+def news_card(item, rank_display, top_class=""):
+    st.markdown(_news_card_html(item, rank_display, top_class), unsafe_allow_html=True)
+
+
+def _policy_signal_card_html(item, rank_display, top_class=""):
+    return f"""
     <div class="sl-item {top_class}">
       <div class="sl-signal">{item['signal']}</div>
       <div class="sl-head"><span class="sl-rank">{rank_display}</span>
-        <a class="sl-title" href="{item['url']}" target="_blank">{item['title']}</a>
+        <a class="sl-title" href="{escape_html(item['url'])}" target="_blank">{escape_html(item['title'])}</a>
         <span class="sl-score">점수 {item['score']}</span></div>
-      <div class="sl-meta">{item['source']} · {item['department']} · 조회 {item['view_count']:,} · {item['announced_at']}</div>
+      <div class="sl-meta">{escape_html(item['source'])} · {escape_html(item['department'])} · 조회 {item['view_count']:,} · {escape_html(item['announced_at'])}</div>
     </div>
-    """, unsafe_allow_html=True)
+    """
+
+
+def policy_signal_card(item, rank_display, top_class=""):
+    st.markdown(_policy_signal_card_html(item, rank_display, top_class), unsafe_allow_html=True)
 
 
 def footer(note):

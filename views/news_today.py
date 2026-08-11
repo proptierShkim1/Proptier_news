@@ -5,7 +5,18 @@ import streamlit as st
 import theme
 import cached_db
 import news_feed
-from utils import load_keywords
+from utils import escape_html, load_keywords
+
+
+def _brief_lead_html(top):
+    return f"""
+    <div class="brief-lead">
+      <span class="brief-tag">01 · TOP SIGNAL</span>
+      <a href="{escape_html(top['url'])}" target="_blank">{escape_html(top['title'])}</a>
+      <p>{escape_html(top['desc'][0]) if top['desc'] else '(요약 없음)'}</p>
+      <div class="brief-why"><b>Why it matters</b><span>{escape_html(top['decision'][0])}</span></div>
+    </div>
+    """
 
 
 def render():
@@ -43,14 +54,7 @@ def render():
 
     st.markdown('<div class="exec-eyebrow">EXECUTIVE BRIEF</div><h2 class="brief-h">오늘의 핵심 브리핑</h2>', unsafe_allow_html=True)
     lead_col, side_col = st.columns([1.65, 0.75])
-    lead_col.markdown(f"""
-    <div class="brief-lead">
-      <span class="brief-tag">01 · TOP SIGNAL</span>
-      <a href="{top['url']}" target="_blank">{top['title']}</a>
-      <p>{top['desc'][0] if top['desc'] else '(요약 없음)'}</p>
-      <div class="brief-why"><b>Why it matters</b><span>{top['decision'][0]}</span></div>
-    </div>
-    """, unsafe_allow_html=True)
+    lead_col.markdown(_brief_lead_html(top), unsafe_allow_html=True)
     side_col.markdown(f"""
     <div class="brief-stat">
       <span class="brief-tag">02 · ISSUE PULSE</span>

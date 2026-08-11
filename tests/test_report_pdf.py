@@ -53,6 +53,28 @@ def test_card_falls_back_to_dash_when_categories_empty():
     assert "일반" in html
 
 
+def test_card_escapes_malicious_title():
+    items = [_item("<img src=x onerror=alert(1)>")]
+
+    html = report_pdf.build_deck_html(items)
+
+    assert "<img src=x onerror=alert(1)>" not in html
+    assert "&lt;img src=x onerror=alert(1)&gt;" in html
+
+
+def test_card_escapes_malicious_url_and_gist_and_decision():
+    items = [_item("제목")]
+    items[0]["url"] = '"><script>alert(2)</script>'
+    items[0]["desc"] = ["<script>alert(3)</script>"]
+    items[0]["decision"] = ["<script>alert(4)</script>"]
+
+    html = report_pdf.build_deck_html(items)
+
+    assert "<script>alert(2)</script>" not in html
+    assert "<script>alert(3)</script>" not in html
+    assert "<script>alert(4)</script>" not in html
+
+
 def test_card_shows_shortcut_link_to_article_url():
     items = [_item("제목")]
     items[0]["url"] = "https://example.com/article/123"

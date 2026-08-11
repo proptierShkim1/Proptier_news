@@ -18,6 +18,17 @@ AGENT_CHAT_HISTORY_FILE = DATA_DIR / "agent_chat_history.json"
 ALL_MENTION_CHANNELS = ["네이버", "구글", "다음", "커뮤니티", "네이버뉴스API"]
 
 
+def escape_html(text: str) -> str:
+    """크롤링한(신뢰할 수 없는) 텍스트를 HTML 본문/속성에 넣기 전에 이스케이프한다.
+    `&`를 가장 먼저 치환해야 뒤이어 만든 `&lt;` 등의 엔티티가 다시 이스케이프되지 않는다."""
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
 def load_json(path: Path, default):
     if not path.exists():
         return default

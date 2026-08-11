@@ -5,8 +5,20 @@ import streamlit as st
 import cached_db
 import policy_feed
 import theme
+from utils import escape_html
 
 _SOURCES = ["국토교통부", "한국부동산원", "LH", "서울시", "HF", "HUG", "SH"]
+
+
+def _brief_lead_html(top):
+    return f"""
+    <div class="brief-lead">
+      <span class="brief-tag">01 · TOP RELEASE</span>
+      <a href="{escape_html(top['url'])}" target="_blank">{escape_html(top['title'])}</a>
+      <p>{escape_html(top['source'])} · {escape_html(top['department'])} · 조회 {top['view_count']:,}회</p>
+      <div class="brief-why"><b>Why it matters</b><span>최근 발표 중 신호 점수·조회수가 가장 높은 보도자료입니다.</span></div>
+    </div>
+    """
 
 
 def render():
@@ -51,14 +63,7 @@ def render():
 
     st.markdown('<div class="exec-eyebrow">EXECUTIVE BRIEF</div><h2 class="brief-h">정책 핵심 브리핑</h2>', unsafe_allow_html=True)
     lead_col, side_col = st.columns([1.65, 0.75])
-    lead_col.markdown(f"""
-    <div class="brief-lead">
-      <span class="brief-tag">01 · TOP RELEASE</span>
-      <a href="{top['url']}" target="_blank">{top['title']}</a>
-      <p>{top['source']} · {top['department']} · 조회 {top['view_count']:,}회</p>
-      <div class="brief-why"><b>Why it matters</b><span>최근 발표 중 신호 점수·조회수가 가장 높은 보도자료입니다.</span></div>
-    </div>
-    """, unsafe_allow_html=True)
+    lead_col.markdown(_brief_lead_html(top), unsafe_allow_html=True)
     side_col.markdown(f"""
     <div class="brief-stat">
       <span class="brief-tag">02 · POLICY PULSE</span>
