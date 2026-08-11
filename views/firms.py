@@ -58,6 +58,12 @@ def render():
     if terms:
         filtered = [iss for iss in filtered if all(t in iss.get("title", "").lower() for t in terms)]
 
+    # articles는 build_issues에서 이미 collected_at 내림차순으로 정렬돼 있으므로
+    # articles[0][0]이 그 이슈에 마지막으로 들어온 기사 시각이다. 이 기준으로 최신 이슈부터
+    # 보여준다 — build_issues 자체는 클러스터 생성(=최초 기사) 오름차순으로 반환하기 때문에,
+    # 여기서 정렬하지 않으면 새로 수집된 이슈가 DISPLAY_LIMIT 밖으로 밀려 화면에 안 보인다.
+    filtered = sorted(filtered, key=lambda iss: iss["articles"][0][0], reverse=True)
+
     st.caption(
         f"현재 필터: {period} · {firm_pick} · 이슈 {len(filtered):,}건 / 전체 {len(issues):,}건"
         + (f" · 검색어: {query}" if query else "")
