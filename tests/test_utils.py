@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 from datetime import datetime
 
 from utils import (
@@ -206,6 +208,36 @@ def test_save_agent_chat_sessions_does_nothing_for_blank_ip(tmp_path, monkeypatc
     utils.save_agent_chat_sessions("", [{"started_at": "", "messages": [{"role": "user", "content": "무시되어야 함"}]}])
 
     assert not history_file.exists()
+
+
+def test_save_agent_chat_sessions_concurrent_writes_do_not_lose_data(tmp_path, monkeypatch):
+    """read-entire-file -> mutate -> write-entire-file 패턴은 두 IP가 거의 동시에 저장하면
+    한쪽의 저장이 다른 쪽에 덮어써질 수 있다 — save_json을 느리게 만들어 그 read-write
+    사이 창을 넓히면 락 없이는 재현되고, 임계구역 전체를 락으로 감싸면 재현되지 않아야 한다."""
+    history_file = tmp_path / "agent_chat_history.json"
+    monkeypatch.setattr(utils, "AGENT_CHAT_HISTORY_FILE", history_file)
+
+    original_save_json = utils.save_json
+
+    def slow_save_json(path, data):
+        time.sleep(0.05)
+        original_save_json(path, data)
+
+    monkeypatch.setattr(utils, "save_json", slow_save_json)
+
+    ips = [f"1.1.1.{i}" for i in range(8)]
+
+    def worker(ip):
+        utils.save_agent_chat_sessions(ip, [{"started_at": "", "messages": [{"role": "user", "content": ip}]}])
+
+    threads = [threading.Thread(target=worker, args=(ip,)) for ip in ips]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    saved = utils.load_json(history_file, {})
+    assert set(saved.keys()) == set(ips)
 
 
 def test_load_agent_chat_sessions_migrates_old_flat_message_list_format(tmp_path, monkeypatch):

@@ -4,6 +4,7 @@ hana_p — 데이터 수집 공용 유틸리티 (키워드/스케줄 설정, 상
 
 import json
 import re
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -142,12 +143,19 @@ def load_agent_chat_sessions(ip: str) -> list:
     return raw
 
 
+_agent_chat_history_lock = threading.Lock()
+
+
 def save_agent_chat_sessions(ip: str, sessions: list) -> None:
+    """read-entire-file → mutate → write-entire-file 방식이라, 서로 다른 IP가 거의 동시에
+    저장하면 락 없이는 한쪽의 저장이 다른 쪽 것을 덮어써 유실될 수 있다 — 파일 전체를 다루는
+    임계구역을 프로세스 전역 락으로 감싸 직렬화한다."""
     if not ip:
         return
-    all_sessions = load_json(AGENT_CHAT_HISTORY_FILE, {})
-    all_sessions[ip] = sessions
-    save_json(AGENT_CHAT_HISTORY_FILE, all_sessions)
+    with _agent_chat_history_lock:
+        all_sessions = load_json(AGENT_CHAT_HISTORY_FILE, {})
+        all_sessions[ip] = sessions
+        save_json(AGENT_CHAT_HISTORY_FILE, all_sessions)
 
 
 _RELATIVE_KOREAN_DATE_RE = re.compile(r"^(\d+)(분|시간|일)\s*전$")
