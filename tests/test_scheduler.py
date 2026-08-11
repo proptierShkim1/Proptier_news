@@ -43,10 +43,12 @@ def test_tick_new_posts_and_policy_fire_on_their_own_independent_schedules(monke
 
     brand_calls = []
     policy_calls = []
-    monkeypatch.setattr(scheduler.collector, "run_collection", lambda trigger: brand_calls.append(trigger))
     monkeypatch.setattr(
-        scheduler.collector, "collect_all_policy_events",
-        lambda days, trigger: policy_calls.append((days, trigger)) or {},
+        scheduler.collector, "start_background_collection", lambda trigger: brand_calls.append(trigger)
+    )
+    monkeypatch.setattr(
+        scheduler.collector, "start_background_policy_collection",
+        lambda days, trigger: policy_calls.append((days, trigger)) or "run-1",
     )
 
     scheduler._tick()
@@ -66,7 +68,8 @@ def test_tick_policy_does_not_fire_twice_for_same_minute(monkeypatch):
 
     calls = []
     monkeypatch.setattr(
-        scheduler.collector, "collect_all_policy_events", lambda days, trigger: calls.append(days) or {}
+        scheduler.collector, "start_background_policy_collection",
+        lambda days, trigger: calls.append(days) or "run-1",
     )
 
     scheduler._tick()
@@ -76,7 +79,7 @@ def test_tick_policy_does_not_fire_twice_for_same_minute(monkeypatch):
 
 
 def test_tick_swallows_exception_from_policy_collection(monkeypatch, caplog):
-    """collect_all_policy_events()이 예외를 던져도 _tick()은 전파하지 않는다."""
+    """start_background_policy_collection()이 예외를 던져도 _tick()은 전파하지 않는다."""
     _reset(monkeypatch)
     _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
     monkeypatch.setattr(scheduler, "load_collection_schedule", lambda: {"times": []})
@@ -86,13 +89,35 @@ def test_tick_swallows_exception_from_policy_collection(monkeypatch, caplog):
     def boom(days, trigger):
         raise RuntimeError("policy collection failed")
 
-    monkeypatch.setattr(scheduler.collector, "collect_all_policy_events", boom)
+    monkeypatch.setattr(scheduler.collector, "start_background_policy_collection", boom)
 
     with caplog.at_level("ERROR", logger="hana_p.scheduler"):
         scheduler._tick()
 
     assert scheduler._last_fired_policy == "2026-07-16 09:00"
     assert any("오류" in record.message for record in caplog.records)
+
+
+def test_tick_new_posts_fires_in_background_without_blocking(monkeypatch):
+    """신규 게시물 자동 수집은 백그라운드 스레드로 시작되어야 한다 — 동기 호출이면
+    이 tick이 오래 걸리는 동안 같은 스레드에서 순차 실행되는 정책/네이버뉴스/벡터화
+    tick이 전부 지연되고, 그 사이 지나가버린 분(HH:MM)의 스케줄은 영영 스킵된다."""
+    _reset(monkeypatch)
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+    monkeypatch.setattr(scheduler, "load_collection_schedule", lambda: {"times": ["09:00"]})
+    monkeypatch.setattr(scheduler, "load_policy_collection_schedule", lambda: {"times": []})
+    monkeypatch.setattr(scheduler, "load_naver_news_collection_schedule", lambda: {"times": []})
+
+    calls = []
+    monkeypatch.setattr(
+        scheduler.collector, "start_background_collection",
+        lambda trigger: calls.append(trigger) or "run-1",
+    )
+
+    scheduler._tick()
+
+    assert calls == ["자동"]
+    assert scheduler._last_fired == "2026-07-16 09:00"
 
 
 def test_tick_swallows_exception_from_load_policy_collection_schedule(monkeypatch, caplog):
@@ -121,10 +146,12 @@ def test_tick_naver_news_fires_on_its_own_independent_schedule(monkeypatch):
     monkeypatch.setattr(scheduler, "load_naver_news_collection_schedule", lambda: {"times": ["09:00"]})
 
     calls = []
-    monkeypatch.setattr(scheduler.collector, "run_collection", lambda trigger: calls.append(("brand", trigger)))
     monkeypatch.setattr(
-        scheduler.collector, "collect_all_policy_events",
-        lambda days, trigger: calls.append(("policy", trigger)) or {},
+        scheduler.collector, "start_background_collection", lambda trigger: calls.append(("brand", trigger))
+    )
+    monkeypatch.setattr(
+        scheduler.collector, "start_background_policy_collection",
+        lambda days, trigger: calls.append(("policy", trigger)) or "run-1",
     )
     monkeypatch.setattr(
         scheduler.collector, "start_background_naver_news_collection",

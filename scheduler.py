@@ -61,7 +61,7 @@ def _tick_new_posts() -> None:
             if schedule_matches_now(schedules, now):
                 with _lock:
                     _last_fired = minute_key
-                collector.run_collection(trigger="자동")
+                collector.start_background_collection(trigger="자동")
     except Exception:
         logger.exception("스케줄러(신규 게시물) 반복 실행 중 오류 발생")
 
@@ -79,8 +79,10 @@ def _tick_policy() -> None:
             if schedule_matches_now(schedules, now):
                 with _lock:
                     _last_fired_policy = minute_key
-                result = collector.collect_all_policy_events(days=_POLICY_COLLECTION_DAYS, trigger="자동")
-                logger.info("정책 데이터 자동 수집 결과: %s", result)
+                started_run_id = collector.start_background_policy_collection(
+                    days=_POLICY_COLLECTION_DAYS, trigger="자동"
+                )
+                logger.info("정책 데이터 자동 수집 시작 (run_id=%s)", started_run_id)
     except Exception:
         logger.exception("스케줄러(정부 정책) 반복 실행 중 오류 발생")
 
