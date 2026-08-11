@@ -122,6 +122,14 @@
   기다려야 해서 첫 로딩이 느려지므로, `scheduler.py`가 5분 주기(+앱 시작 시 즉시)로 백그라운드에서
   미리 요약해 둔다(`summarizer.presummarize_top_pdf_items`) — 렌더링 경로는 대부분 이미 채워진
   요약을 그대로 쓰고 실제 호출 없이 넘어간다
+- **원문 없는 기사 제외**: `news_feed.build_news_items()`는 항목마다 `has_real_content`
+  플래그를 매긴다(본문 또는 제목과 다른 스니펫이 있으면 True). 구글 채널은 검색 결과
+  스니펫을 항상 제목과 동일하게 주고, 뉴스 링크(`news.google.com/rss/articles/...`)도
+  구글 자체 JS 페이지라 원문 URL을 서버 사이드로 못 따라가 본문 수집기가 없다 — 즉 구글
+  채널 기사는 항상 `has_real_content=False`. `views/report.py`의 `_select_pdf_items()`가
+  top5를 고를 때 이 플래그가 False인 항목을 미리 제외해서, "OO 채널에서 수집된 기사입니다"
+  같은 안내 문구만 있는 카드가 PDF에 나가지 않게 한다(오늘의 뉴스/뉴스 검색 화면은 안내
+  문구 + 원문 링크 형태로도 유용해서 그대로 둔다)
 
 ## AI AGENT (Gemini 챗봇)
 

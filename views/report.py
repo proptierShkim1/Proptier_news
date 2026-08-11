@@ -18,6 +18,13 @@ def _ensure_pdf_summaries(items: list[dict]) -> None:
         cached_db.get_mentions.clear()
 
 
+def _select_pdf_items(news_items: list[dict], limit: int = 5) -> list[dict]:
+    """원문도 스니펫도 얻지 못해 채널 안내 문구만 나오는 항목(예: 원문 리다이렉트를
+    못 따라간 구글 채널 기사)은 실체 없는 카드로 PDF에 나가지 않도록 제외한다."""
+    real_content_items = [it for it in news_items if it.get("has_real_content", True)]
+    return real_content_items[:limit]
+
+
 def render():
     theme.hero(
         "\U0001F4C4 PDF 보고서",
@@ -31,7 +38,7 @@ def render():
         return
 
     news_items = news_feed.build_news_items(mentions, news_feed.own_brand_names())
-    top5 = news_items[:5]
+    top5 = _select_pdf_items(news_items)
     _ensure_pdf_summaries(top5)
     total_count = cached_db.count_mentions()
     ai_count = sum(1 for it in news_items if "AI" in it["categories"])

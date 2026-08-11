@@ -79,6 +79,30 @@ def test_build_news_items_truncates_long_content_to_preview_length():
     assert len(desc) == news_feed.CONTENT_PREVIEW_LEN + 1
 
 
+def test_build_news_items_flags_has_real_content_false_when_falling_back_to_channel_note():
+    mentions = [_mention("직방 AI 매물 추천 출시", snippet="")]
+
+    items = news_feed.build_news_items(mentions, own_brands=set())
+
+    assert items[0]["has_real_content"] is False
+
+
+def test_build_news_items_flags_has_real_content_true_when_snippet_differs_from_title():
+    mentions = [_mention("직방 AI 매물 추천 출시", snippet="허위매물을 자동으로 걸러내는 기능이 핵심이다")]
+
+    items = news_feed.build_news_items(mentions, own_brands=set())
+
+    assert items[0]["has_real_content"] is True
+
+
+def test_build_news_items_flags_has_real_content_true_when_content_present():
+    mentions = [_mention("직방 AI 매물 추천 출시", content="원문 첫 문단입니다.")]
+
+    items = news_feed.build_news_items(mentions, own_brands=set())
+
+    assert items[0]["has_real_content"] is True
+
+
 def test_build_news_items_decision_line_names_matched_categories():
     mentions = [_mention("직방 AI 매물 추천 서비스 출시")]
 

@@ -140,6 +140,7 @@ def build_news_items(mentions: list[dict], own_brands: set, now: datetime | None
         summary = (m.get("summary") or "").strip()
         snippet = (m.get("snippet") or "").strip()
         title = (m.get("title") or "").strip()
+        has_real_content = bool(content) or bool(snippet and snippet != title)
         if content:
             source_text = content
         elif snippet and snippet != title:
@@ -177,6 +178,7 @@ def build_news_items(mentions: list[dict], own_brands: set, now: datetime | None
             "mention_id": m.get("id"),
             "content": content,
             "summary": summary,
+            "has_real_content": has_real_content,
             "decision": [f"{cat_line} {recency_line}"],
             "meta": f"🕒 {m.get('posted_at') or (m.get('collected_at', '') or '')[:16]} · {m.get('channel', '')}",
             "_collected": collected,
