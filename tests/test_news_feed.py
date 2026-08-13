@@ -346,3 +346,31 @@ def test_archive_pending_briefings_returns_empty_when_no_mentions_at_all(tmp_pat
     monkeypatch.setattr(news_feed, "load_keywords", lambda: {"brands": []})
 
     assert news_feed.archive_pending_briefings() == []
+
+
+def test_archive_pending_briefings_never_archives_a_gap_date_with_zero_mentions(tmp_path, monkeypatch):
+    """2026-08-11에는 mentions가 하나도 없는 경우 — 예전 day-by-day 루프 방식이면
+    이 날짜도 순회는 하지만(빈 리스트라 확정 안 됨) 매 tick마다 헛되이 재조회됐다.
+    distinct-dates 접근에서는 애초에 이 날짜가 후보로 떠오르지도 않아야 한다."""
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    monkeypatch.setattr(news_feed, "load_keywords", lambda: {"brands": []})
+    db.insert_mention({
+        "brand": "직방", "channel": "네이버", "source_detail": "", "title": "제목1",
+        "url": "https://x/1", "snippet": "", "posted_at": "", "collected_at": "2026-08-10 09:00:00",
+    })
+    db.insert_mention({
+        "brand": "직방", "channel": "네이버", "source_detail": "", "title": "제목2",
+        "url": "https://x/2", "snippet": "", "posted_at": "", "collected_at": "2026-08-12 09:00:00",
+    })
+
+    class _FixedDate(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 8, 13)
+
+    monkeypatch.setattr(news_feed, "date", _FixedDate)
+
+    archived = news_feed.archive_pending_briefings()
+
+    assert set(archived) == {"2026-08-10", "2026-08-12"}
+    assert "2026-08-11" not in db.get_archived_briefing_dates()

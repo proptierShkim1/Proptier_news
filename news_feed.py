@@ -409,41 +409,34 @@ def build_briefing_archive_content(
 
 
 def archive_pending_briefings() -> list[str]:
-    """가장 이른 mention 수집일부터 어제까지, 아직 확정 안 된 날짜를 전부 찾아 하나씩
+    """mentions가 실제로 존재하는 날짜 중 아직 확정 안 된 날짜를 전부 찾아 하나씩
     아카이브한다. 오늘 날짜는 절대 확정하지 않는다(아직 진행 중이므로). 새로 확정된
     날짜 목록을 반환한다 — 최초 실행 시에는 그동안 쌓인 과거 날짜 전부가 한 번에
-    소급 확정된다."""
-    earliest = db.get_earliest_mention_date()
-    if earliest is None:
-        return []
-
-    today = date.today()
-    yesterday = today - timedelta(days=1)
-    start = datetime.strptime(earliest, "%Y-%m-%d").date()
-    if start > yesterday:
-        return []
-
+    소급 확정된다. 데이터가 하나도 없는 날짜(gap)는 get_distinct_mention_dates()가
+    애초에 반환하지 않으므로, 매 tick마다 빈 날짜를 헛되이 재조회하지 않는다."""
+    today_str = date.today().strftime("%Y-%m-%d")
+    mention_dates = db.get_distinct_mention_dates()
     already_archived = db.get_archived_briefing_dates()
+    pending_dates = sorted(mention_dates - already_archived - {today_str})
+    if not pending_dates:
+        return []
+
     own_brands = own_brand_names()
     competitor_brands = competitor_brand_names()
     market_brands = market_brand_names()
 
     newly_archived = []
-    current = start
-    while current <= yesterday:
-        date_str = current.strftime("%Y-%m-%d")
-        if date_str not in already_archived:
-            day_mentions = db.get_mentions_by_collected_date(date_str)
-            if day_mentions:
-                content = build_briefing_archive_content(
-                    day_mentions, own_brands, competitor_brands, market_brands,
-                )
-                record = {
-                    "date": date_str,
-                    "archived_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    **content,
-                }
-                if db.insert_briefing_archive(record):
-                    newly_archived.append(date_str)
-        current += timedelta(days=1)
+    for date_str in pending_dates:
+        day_mentions = db.get_mentions_by_collected_date(date_str)
+        if day_mentions:
+            content = build_briefing_archive_content(
+                day_mentions, own_brands, competitor_brands, market_brands,
+            )
+            record = {
+                "date": date_str,
+                "archived_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                **content,
+            }
+            if db.insert_briefing_archive(record):
+                newly_archived.append(date_str)
     return newly_archived

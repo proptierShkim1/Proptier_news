@@ -580,3 +580,13 @@ def test_get_mentions_by_collected_date_filters_to_exact_day_regardless_of_chann
     results = db.get_mentions_by_collected_date("2026-08-05")
 
     assert {r["url"] for r in results} == {"https://x/1", "https://x/2"}
+
+
+def test_get_distinct_mention_dates_returns_unique_dates_only(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention({**_mention(url="https://x/1"), "collected_at": "2026-08-05 09:00:00"})
+    db.insert_mention({**_mention(url="https://x/2"), "collected_at": "2026-08-05 23:00:00"})
+    db.insert_mention({**_mention(url="https://x/3"), "collected_at": "2026-08-06 09:00:00"})
+    db.insert_mention({**_mention(url="https://x/4"), "collected_at": "2026-08-07 09:00:00"})
+
+    assert db.get_distinct_mention_dates() == {"2026-08-05", "2026-08-06", "2026-08-07"}

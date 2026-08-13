@@ -710,11 +710,23 @@ def get_earliest_mention_date() -> str | None:
 def get_mentions_by_collected_date(date: str) -> list[dict]:
     """채널 표시 설정과 무관하게 그 날짜에 수집된 mentions 전체를 반환한다 — 브리핑
     아카이빙은 확정 시점의 전체 채널 데이터를 기준으로 해야 하므로 get_mentions()의
-    노출 필터를 거치지 않는다."""
+    노출 필터를 거치지 않는다. embedding 컬럼은 build_news_items()가 쓰지 않는데도
+    용량이 커서 SELECT *로는 뽑지 않는다."""
     init_db()
     with _connect() as con:
         con.row_factory = sqlite3.Row
         rows = con.execute(
-            "SELECT * FROM mentions WHERE date(collected_at) = ? ORDER BY collected_at DESC", [date]
+            "SELECT id, brand, channel, source_detail, title, url, snippet, posted_at, "
+            "collected_at, search_term, content, summary FROM mentions "
+            "WHERE date(collected_at) = ? ORDER BY collected_at DESC", [date]
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def get_distinct_mention_dates() -> set[str]:
+    """mentions가 실제로 존재하는 수집일(날짜) 집합을 반환한다. archive_pending_briefings()가
+    데이터 없는 날짜를 매 tick마다 재조회하지 않도록, date(collected_at)에 인덱스를 못 쓰는
+    비용을 이 한 번의 DISTINCT 쿼리로만 감수하고 gap-date는 아예 걸러낸다."""
+    init_db()
+    with _connect() as con:
+        return {r[0] for r in con.execute("SELECT DISTINCT date(collected_at) FROM mentions").fetchall()}
