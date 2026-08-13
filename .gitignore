@@ -5,6 +5,7 @@ streamlit.log
 streamlit_err.log
 streamlit_out.log
 .claude/
+.superpowers/
 data/access_config.json
 data/news.db
 data/keywords.json
