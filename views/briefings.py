@@ -1,49 +1,96 @@
+from datetime import date
+
+import pandas as pd
 import streamlit as st
 
 import cached_db
+import db
 import news_feed
 import theme
 
 
-def render():
-    mentions = cached_db.get_mentions(limit=news_feed.BROAD_LIMIT, channels=tuple(news_feed.enabled_channels()))
+def _render_news_list(title: str, items: list) -> None:
+    st.markdown(f"#### {title}")
+    if not items:
+        st.caption("해당 소식 없음")
+        return
+    for it in items:
+        st.markdown(f"- [{it['title']}]({it['url']}) · {it['brand']} · {it['posted_at']}")
+        if it.get("desc"):
+            st.caption(it["desc"])
 
-    if not mentions:
+
+def _render_sections(date_str: str, content: dict) -> None:
+    st.markdown(f"### {date_str}")
+    st.caption(f"총 {content['total_count']:,}건 수집")
+
+    st.markdown("#### 📡 채널별 수집 현황")
+    counts = sorted(content["channel_counts"].items(), key=lambda kv: -kv[1])
+    if counts:
+        counts_df = pd.DataFrame([{"채널": ch, "건수": n} for ch, n in counts])
+        st.dataframe(counts_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("수집된 데이터 없음")
+
+    st.markdown("#### 📰 채널별 주요 뉴스")
+    for ch, items in content["channel_top_news"].items():
+        with st.expander(f"{ch} ({len(items)}건)"):
+            for it in items:
+                st.markdown(f"- [{it['title']}]({it['url']}) · {it['brand']} · {it['posted_at']}")
+
+    _render_news_list("🏠 프롭티어 관련 뉴스", content["own_brand_news"])
+    _render_news_list("⚔️ 경쟁사 동향", content["competitor_news"])
+    _render_news_list("🌐 시장 동향", content["market_news"])
+
+
+def render():
+    archived_dates = sorted(db.get_archived_briefing_dates(), reverse=True)
+    today_str = date.today().strftime("%Y-%m-%d")
+
+    live_mentions = cached_db.get_mentions(
+        limit=news_feed.BROAD_LIMIT, channels=tuple(news_feed.enabled_channels())
+    )
+    today_mentions = [m for m in live_mentions if (m.get("collected_at") or "")[:10] == today_str]
+    has_today = bool(today_mentions)
+
+    dates = ([today_str] if has_today else []) + [d for d in archived_dates if d != today_str]
+
+    if not dates:
         theme.hero("\U0001F4DD 브리핑 아카이브", "아직 수집된 데이터가 없습니다")
         st.info("설정 → 데이터 수집에서 수집을 먼저 실행해주세요.")
         theme.footer("실데이터 연동 · 수집 대기 중")
         return
 
-    briefings = news_feed.build_briefings(mentions, news_feed.own_brand_names())
-
     theme.hero(
         "\U0001F4DD 브리핑 아카이브",
-        f"수집일 기준 브리핑 {len(briefings):,}건 · 왼쪽 목록에서 날짜를 고르세요",
+        f"확정된 브리핑 {len(archived_dates):,}건 · 왼쪽 목록에서 날짜를 고르세요",
     )
 
-    if "briefing_idx" not in st.session_state or st.session_state.briefing_idx >= len(briefings):
-        st.session_state.briefing_idx = 0
+    if "briefing_date_idx" not in st.session_state or st.session_state.briefing_date_idx >= len(dates):
+        st.session_state.briefing_date_idx = 0
 
     list_col, panel_col = st.columns([1, 2.4])
 
     with list_col:
-        for i, b in enumerate(briefings):
-            selected = i == st.session_state.briefing_idx
+        for i, d in enumerate(dates):
+            selected = i == st.session_state.briefing_date_idx
             prefix = "\U0001F449 " if selected else ""
-            if st.button(f"{prefix}{b['date']}", key=f"bf_{i}", use_container_width=True):
-                st.session_state.briefing_idx = i
+            label = f"{d} (진행중)" if d == today_str and has_today else d
+            if st.button(f"{prefix}{label}", key=f"bf_{i}", use_container_width=True):
+                st.session_state.briefing_date_idx = i
                 st.rerun()
 
     with panel_col:
-        b = briefings[st.session_state.briefing_idx]
-        st.markdown(f"""
-        <div class="sl-item top1">
-          <div class="sl-signal">{b['date']}</div>
-          <div class="sl-head"><span class="sl-title">{b['title']}</span></div>
-          <div class="insight"><div class="insight-title">브리핑 요약</div>
-            <ul><li>{b['summary']}</li></ul></div>
-          <div class="sl-meta">해당 날짜에 수집된 mentions를 자동 요약했습니다.</div>
-        </div>
-        """, unsafe_allow_html=True)
+        picked_date = dates[st.session_state.briefing_date_idx]
+        if picked_date == today_str and has_today:
+            st.info("\U0001F504 오늘은 아직 진행 중입니다 — 자정이 지나면 자동으로 확정됩니다.")
+            content = news_feed.build_briefing_archive_content(
+                today_mentions, news_feed.own_brand_names(),
+                news_feed.competitor_brand_names(), news_feed.market_brand_names(),
+            )
+            _render_sections(today_str, content)
+        else:
+            archive = db.get_briefing_archive(picked_date)
+            _render_sections(archive["date"], archive)
 
-    theme.footer("실제 수집 데이터(mentions)를 수집일 기준으로 묶어 자동 생성")
+    theme.footer("확정된 날짜는 고정 기록 · 오늘은 실시간 집계")
