@@ -691,3 +691,30 @@ def get_briefing_archive(date: str) -> dict | None:
         for key in ("channel_counts", "channel_top_news", "own_brand_news", "competitor_news", "market_news"):
             result[key] = json.loads(result[key])
         return result
+
+
+def get_archived_briefing_dates() -> set[str]:
+    init_db()
+    with _connect() as con:
+        rows = con.execute("SELECT date FROM briefing_archives").fetchall()
+        return {r[0] for r in rows}
+
+
+def get_earliest_mention_date() -> str | None:
+    init_db()
+    with _connect() as con:
+        row = con.execute("SELECT MIN(date(collected_at)) FROM mentions").fetchone()
+        return row[0] if row and row[0] else None
+
+
+def get_mentions_by_collected_date(date: str) -> list[dict]:
+    """채널 표시 설정과 무관하게 그 날짜에 수집된 mentions 전체를 반환한다 — 브리핑
+    아카이빙은 확정 시점의 전체 채널 데이터를 기준으로 해야 하므로 get_mentions()의
+    노출 필터를 거치지 않는다."""
+    init_db()
+    with _connect() as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT * FROM mentions WHERE date(collected_at) = ? ORDER BY collected_at DESC", [date]
+        ).fetchall()
+        return [dict(r) for r in rows]

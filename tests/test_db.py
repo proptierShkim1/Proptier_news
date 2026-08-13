@@ -547,3 +547,36 @@ def test_get_briefing_archive_returns_none_when_not_archived(tmp_path, monkeypat
     _isolate(tmp_path, monkeypatch)
 
     assert db.get_briefing_archive("2026-01-01") is None
+
+
+def test_get_archived_briefing_dates_returns_set_of_dates(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_briefing_archive(_briefing_archive_record(date="2026-08-10"))
+    db.insert_briefing_archive(_briefing_archive_record(date="2026-08-11"))
+
+    assert db.get_archived_briefing_dates() == {"2026-08-10", "2026-08-11"}
+
+
+def test_get_earliest_mention_date_returns_min_date(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention({**_mention(url="https://x/1"), "collected_at": "2026-08-05 10:00:00"})
+    db.insert_mention({**_mention(url="https://x/2"), "collected_at": "2026-08-03 09:00:00"})
+
+    assert db.get_earliest_mention_date() == "2026-08-03"
+
+
+def test_get_earliest_mention_date_returns_none_when_no_mentions(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+
+    assert db.get_earliest_mention_date() is None
+
+
+def test_get_mentions_by_collected_date_filters_to_exact_day_regardless_of_channel(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention({**_mention(url="https://x/1", channel="네이버"), "collected_at": "2026-08-05 09:00:00"})
+    db.insert_mention({**_mention(url="https://x/2", channel="매경API"), "collected_at": "2026-08-05 23:00:00"})
+    db.insert_mention({**_mention(url="https://x/3", channel="네이버"), "collected_at": "2026-08-06 09:00:00"})
+
+    results = db.get_mentions_by_collected_date("2026-08-05")
+
+    assert {r["url"] for r in results} == {"https://x/1", "https://x/2"}
