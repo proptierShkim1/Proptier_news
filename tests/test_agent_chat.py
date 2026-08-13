@@ -129,3 +129,98 @@ def test_build_grounding_context_formats_mention_and_policy_hits():
 
 def test_build_grounding_context_returns_empty_string_when_no_hits():
     assert agent_chat.build_grounding_context([], []) == ""
+
+
+def test_is_grounding_sufficient_true_when_best_distance_within_threshold():
+    mention_hits = [{"distance": 0.79}, {"distance": 0.95}]
+    assert agent_chat.is_grounding_sufficient(mention_hits, []) is True
+
+
+def test_is_grounding_sufficient_false_when_all_distances_exceed_threshold():
+    mention_hits = [{"distance": 0.91}]
+    policy_hits = [{"distance": 0.88}]
+    assert agent_chat.is_grounding_sufficient(mention_hits, policy_hits) is False
+
+
+def test_is_grounding_sufficient_false_when_no_hits_at_all():
+    assert agent_chat.is_grounding_sufficient([], []) is False
+
+
+def test_is_grounding_sufficient_uses_best_distance_across_both_sources():
+    mention_hits = [{"distance": 0.95}]
+    policy_hits = [{"distance": 0.5}]
+    assert agent_chat.is_grounding_sufficient(mention_hits, policy_hits) is True
+
+
+def test_is_grounding_sufficient_respects_custom_threshold():
+    mention_hits = [{"distance": 0.5}]
+    assert agent_chat.is_grounding_sufficient(mention_hits, [], threshold=0.3) is False
+
+
+def test_ask_with_web_search_returns_error_message_when_no_keys_configured(monkeypatch):
+    monkeypatch.setattr(agent_chat.summarizer, "_load_api_keys", lambda: [])
+
+    result = agent_chat.ask_with_web_search([], "화성 이주 계획 알려줘")
+
+    assert "GEMINI_API_KEYS" in result
+
+
+def test_ask_with_web_search_attaches_google_search_tool(monkeypatch):
+    monkeypatch.setattr(agent_chat.summarizer, "_load_api_keys", lambda: ["key1"])
+    fake_chat = MagicMock()
+    fake_chat.send_message.return_value = MagicMock(text="웹 검색 기반 답변")
+    fake_client = MagicMock()
+    fake_client.chats.create.return_value = fake_chat
+
+    with patch.object(agent_chat.genai, "Client", return_value=fake_client):
+        result = agent_chat.ask_with_web_search([], "화성 이주 계획 알려줘")
+
+    config = fake_client.chats.create.call_args.kwargs["config"]
+    assert len(config["tools"]) == 1
+    assert "웹 검색" in config["system_instruction"]
+    fake_chat.send_message.assert_called_once_with("화성 이주 계획 알려줘")
+    assert result == "웹 검색 기반 답변"
+
+
+def test_ask_with_web_search_seeds_prior_history(monkeypatch):
+    monkeypatch.setattr(agent_chat.summarizer, "_load_api_keys", lambda: ["key1"])
+    fake_chat = MagicMock()
+    fake_chat.send_message.return_value = MagicMock(text="응답")
+    fake_client = MagicMock()
+    fake_client.chats.create.return_value = fake_chat
+
+    history = [{"role": "user", "content": "이전 질문"}, {"role": "assistant", "content": "이전 답변"}]
+
+    with patch.object(agent_chat.genai, "Client", return_value=fake_client):
+        agent_chat.ask_with_web_search(history, "다음 질문")
+
+    seeded = fake_client.chats.create.call_args.kwargs["history"]
+    assert len(seeded) == 2
+    assert seeded[0].role == "user"
+    assert seeded[1].role == "model"
+
+
+def test_ask_with_web_search_tries_next_key_when_first_fails(monkeypatch):
+    monkeypatch.setattr(agent_chat.summarizer, "_load_api_keys", lambda: ["bad-key", "good-key"])
+    failing_client = MagicMock()
+    failing_client.chats.create.side_effect = Exception("boom")
+    working_chat = MagicMock()
+    working_chat.send_message.return_value = MagicMock(text="복구된 응답")
+    working_client = MagicMock()
+    working_client.chats.create.return_value = working_chat
+
+    with patch.object(agent_chat.genai, "Client", side_effect=[failing_client, working_client]):
+        result = agent_chat.ask_with_web_search([], "화성 이주 계획 알려줘")
+
+    assert result == "복구된 응답"
+
+
+def test_ask_with_web_search_returns_fallback_message_when_all_keys_fail(monkeypatch):
+    monkeypatch.setattr(agent_chat.summarizer, "_load_api_keys", lambda: ["key1"])
+    failing_client = MagicMock()
+    failing_client.chats.create.side_effect = Exception("boom")
+
+    with patch.object(agent_chat.genai, "Client", return_value=failing_client):
+        result = agent_chat.ask_with_web_search([], "화성 이주 계획 알려줘")
+
+    assert "실패" in result

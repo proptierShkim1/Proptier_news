@@ -59,9 +59,24 @@ def render():
     viewed = sessions[picked_idx]
     if not is_current and viewed.get("started_at"):
         st.caption(f"\U0001F5D3️ 대화 시작: {viewed['started_at']}")
-    for turn in viewed["messages"]:
+    for idx, turn in enumerate(viewed["messages"]):
         with st.chat_message(turn["role"]):
             st.markdown(turn["content"])
+            if (
+                is_current and turn["role"] == "assistant"
+                and turn.get("insufficient") and not turn.get("web_search_done")
+            ):
+                if st.button("\U0001F310 웹 검색으로 다시 답변받기", key=f"web_search_btn_{idx}"):
+                    question = viewed["messages"][idx - 1]["content"]
+                    with st.spinner("웹 검색 중..."):
+                        web_reply = agent_chat.ask_with_web_search(viewed["messages"][:idx - 1], question)
+                    turn["web_search_done"] = True
+                    viewed["messages"].append({
+                        "role": "assistant",
+                        "content": f"\U0001F310 **웹 검색 기반 답변**\n\n{web_reply}",
+                    })
+                    utils.save_agent_chat_sessions(client_ip, sessions)
+                    st.rerun()
 
     if is_current:
         user_input = st.chat_input("예: 직방의 최근 1달간 동향 알려줘")
@@ -77,11 +92,16 @@ def render():
                     policy_hits = vectorizer.search_similar_policy_events(user_input, top_k=3)
                     context = agent_chat.build_grounding_context(mention_hits, policy_hits)
                     reply = agent_chat.ask(history, user_input, context=context)
+                    sufficient = agent_chat.is_grounding_sufficient(mention_hits, policy_hits)
                 st.markdown(reply)
 
+            assistant_turn = {"role": "assistant", "content": reply}
+            if not sufficient:
+                assistant_turn["insufficient"] = True
             history.append({"role": "user", "content": user_input})
-            history.append({"role": "assistant", "content": reply})
+            history.append(assistant_turn)
             utils.save_agent_chat_sessions(client_ip, sessions)
+            st.rerun()
     else:
         st.info("지난 대화를 보고 있어요 · 이어서 얘기하려면 위에서 '현재 대화'를 선택하세요.")
 
