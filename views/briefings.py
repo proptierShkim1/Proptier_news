@@ -3,7 +3,6 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-import cached_db
 import db
 import news_feed
 import theme
@@ -47,13 +46,18 @@ def render():
     archived_dates = sorted(db.get_archived_briefing_dates(), reverse=True)
     today_str = date.today().strftime("%Y-%m-%d")
 
-    live_mentions = cached_db.get_mentions(
-        limit=news_feed.BROAD_LIMIT, channels=tuple(news_feed.enabled_channels())
-    )
-    today_mentions = [m for m in live_mentions if (m.get("collected_at") or "")[:10] == today_str]
+    # 오늘의 미리보기는 내일 확정될 아카이브와 정확히 같은 기준(채널 노출 설정 무관,
+    # 건수 제한 없음)으로 계산해야 한다 — cached_db.get_mentions(limit=BROAD_LIMIT)를
+    # 쓰면 1000건 넘는 날 미리보기와 실제 확정본의 총 건수가 달라져 보인다.
+    today_mentions = db.get_mentions_by_collected_date(today_str)
     has_today = bool(today_mentions)
 
-    dates = ([today_str] if has_today else []) + [d for d in archived_dates if d != today_str]
+    # 확정된 날짜 + "데이터는 있지만 아직 확정 안 된" 과거 날짜(오늘 제외)를 합쳐서
+    # 목록에 노출한다 — 배포 직후 첫 스케줄러 tick 전이거나 스케줄러 스레드가 죽은
+    # 경우에도 그 날짜가 목록에서 아예 사라지지 않게 한다.
+    unarchived_with_data = db.get_distinct_mention_dates() - set(archived_dates) - {today_str}
+    other_dates = sorted(set(archived_dates) | unarchived_with_data, reverse=True)
+    dates = ([today_str] if has_today else []) + [d for d in other_dates if d != today_str]
 
     if not dates:
         theme.hero("\U0001F4DD 브리핑 아카이브", "아직 수집된 데이터가 없습니다")
@@ -91,6 +95,9 @@ def render():
             _render_sections(today_str, content)
         else:
             archive = db.get_briefing_archive(picked_date)
-            _render_sections(archive["date"], archive)
+            if archive is None:
+                st.info("⏳ 아직 확정 전입니다 — 스케줄러가 곧 처리합니다.")
+            else:
+                _render_sections(archive["date"], archive)
 
     theme.footer("확정된 날짜는 고정 기록 · 오늘은 실시간 집계")
