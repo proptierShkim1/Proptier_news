@@ -30,11 +30,12 @@ def _reset(monkeypatch):
     # 매경 API 스케줄은 이 스케줄을 직접 테스트하는 케이스가 아니면 빈 스케줄로
     # 고정해, 다른 tick 테스트가 실제 데이터 파일 유무에 좌우되지 않게 한다.
     monkeypatch.setattr(scheduler, "load_mk_news_collection_schedule", lambda: {"times": []})
-    # 신규 게시물/정책/네이버뉴스 스케줄과 무관한 PDF 요약 미리 생성/자동 벡터화 tick은
-    # 실제 Gemini/DB를 건드리므로, 이 tick들을 직접 테스트하는 케이스가 아니면 아무 일도
-    # 하지 않게 한다.
+    # 신규 게시물/정책/네이버뉴스 스케줄과 무관한 PDF 요약 미리 생성/자동 벡터화/브리핑
+    # 아카이빙 tick은 실제 Gemini/DB를 건드리므로, 이 tick들을 직접 테스트하는 케이스가
+    # 아니면 아무 일도 하지 않게 한다.
     monkeypatch.setattr(scheduler, "_tick_pdf_presummary", lambda: None)
     monkeypatch.setattr(scheduler, "_tick_auto_vectorize", lambda: None)
+    monkeypatch.setattr(scheduler, "_tick_archive_briefings", lambda: None)
 
 
 def test_tick_new_posts_and_policy_fire_on_their_own_independent_schedules(monkeypatch):
@@ -412,3 +413,47 @@ def test_tick_auto_vectorize_swallows_exception(monkeypatch, caplog):
 
     assert scheduler._last_fired_vectorize == "2026-07-16 09:00"
     assert any("오류" in record.message for record in caplog.records)
+
+
+def test_tick_archive_briefings_calls_archive_pending_briefings(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        scheduler.news_feed, "archive_pending_briefings", lambda: calls.append(1) or ["2026-08-10"]
+    )
+
+    scheduler._tick_archive_briefings()
+
+    assert calls == [1]
+
+
+def test_tick_archive_briefings_swallows_exception(monkeypatch, caplog):
+    def boom():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(scheduler.news_feed, "archive_pending_briefings", boom)
+
+    with caplog.at_level("ERROR", logger="hana_p.scheduler"):
+        scheduler._tick_archive_briefings()
+
+    assert any("오류" in record.message for record in caplog.records)
+
+
+def test_tick_includes_archive_briefings_when_not_disabled(monkeypatch):
+    """_reset()의 비활성화 없이 _tick()을 직접 호출하면 브리핑 아카이빙 tick도 함께 도는지
+    확인 — _tick()에 실제로 연결됐는지 검증하는 목적."""
+    monkeypatch.setattr(scheduler, "_last_fired", "")
+    monkeypatch.setattr(scheduler, "_last_fired_policy", "")
+    monkeypatch.setattr(scheduler, "_last_fired_naver_news", "")
+    monkeypatch.setattr(scheduler, "_last_fired_mk_news", "")
+    monkeypatch.setattr(scheduler, "load_collection_schedule", lambda: {"times": []})
+    monkeypatch.setattr(scheduler, "load_policy_collection_schedule", lambda: {"times": []})
+    monkeypatch.setattr(scheduler, "load_naver_news_collection_schedule", lambda: {"times": []})
+    monkeypatch.setattr(scheduler, "load_mk_news_collection_schedule", lambda: {"times": []})
+    monkeypatch.setattr(scheduler, "_tick_pdf_presummary", lambda: None)
+    monkeypatch.setattr(scheduler, "_tick_auto_vectorize", lambda: None)
+    calls = []
+    monkeypatch.setattr(scheduler.news_feed, "archive_pending_briefings", lambda: calls.append(1) or [])
+
+    scheduler._tick()
+
+    assert calls == [1]

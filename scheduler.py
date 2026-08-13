@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import collector
+import news_feed
 import summarizer
 import vectorizer
 from utils import (
@@ -127,6 +128,17 @@ def _tick_mk_news() -> None:
         logger.exception("스케줄러(매경 API) 반복 실행 중 오류 발생")
 
 
+def _tick_archive_briefings() -> None:
+    """일별 브리핑 확정(아카이빙). 정확한 시각 일치가 아니라 "아직 확정 안 된 과거
+    날짜가 있으면 즉시 확정"하는 방식이라 tick을 놓쳐도 다음 tick에서 만회된다."""
+    try:
+        archived = news_feed.archive_pending_briefings()
+        if archived:
+            logger.info("브리핑 아카이빙 완료: %s", ", ".join(sorted(archived)))
+    except Exception:
+        logger.exception("스케줄러(브리핑 아카이빙) 반복 실행 중 오류 발생")
+
+
 def _tick_pdf_presummary() -> None:
     """PDF 보고서 상위 5개 항목의 AI 요약을 백그라운드에서 미리 만들어 DB에 저장한다.
     렌더링 시점(views/report.py)에 처음 요약을 만들면 Gemini 호출을 기다려야 해서 첫
@@ -174,11 +186,12 @@ def _tick_auto_vectorize() -> None:
 
 def _tick() -> None:
     """스케줄러 한 사이클 분량의 로직. 신규 게시물/정부 정책/네이버뉴스 API/매경 API는
-    각자 독립된 스케줄로 체크한다."""
+    각자 독립된 스케줄로 체크하고, 브리핑 아카이빙은 스케줄과 무관하게 매 tick 확인한다."""
     _tick_new_posts()
     _tick_policy()
     _tick_naver_news()
     _tick_mk_news()
+    _tick_archive_briefings()
     _tick_pdf_presummary()
     _tick_auto_vectorize()
 
