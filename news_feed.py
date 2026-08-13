@@ -168,6 +168,8 @@ def build_news_items(mentions: list[dict], own_brands: set, now: datetime | None
             "score": _score(m, categories, own_brands, now),
             "title": m.get("title", ""),
             "url": m.get("url", ""),
+            "channel": m.get("channel", ""),
+            "posted_at": m.get("posted_at", ""),
             "date": collected.strftime("%Y-%m-%d") if collected else (m.get("collected_at", "") or "")[:10],
             "firm": m.get("brand", ""),
             "collected_at": m.get("collected_at", ""),
@@ -352,3 +354,53 @@ def build_briefings(mentions: list[dict], own_brands: set, limit_days: int = 14)
             "summary": f"{headline} 등 {len(day_mentions):,}건 선별" if headline else f"{len(day_mentions):,}건 수집",
         })
     return briefings
+
+
+def competitor_brand_names() -> set:
+    return {b["name"] for b in load_keywords().get("brands", []) if b.get("role") == "competitor"}
+
+
+def market_brand_names() -> set:
+    return {b["name"] for b in load_keywords().get("brands", []) if b.get("role") == "market"}
+
+
+def _archive_item(it: dict) -> dict:
+    return {
+        "title": it["title"], "url": it["url"], "brand": it["firm"], "channel": it["channel"],
+        "posted_at": it["posted_at"], "signal": it["signal"],
+        "desc": it["desc"][0] if it["desc"] else "",
+    }
+
+
+def build_briefing_archive_content(
+    mentions: list[dict], own_brands: set, competitor_brands: set, market_brands: set,
+    now: datetime | None = None,
+) -> dict:
+    """하루치 mentions를 채널별 수집 현황/주요 뉴스, 자사/경쟁사/시장 동향으로 가공한다.
+    build_news_items()로 매긴 점수(카테고리 매칭·최근성·자사 가산)를 그대로 재사용해
+    채널별/역할별 상위 항목만 골라 담는다. 아카이브에는 mention_id가 아니라 표시용 필드를
+    그대로 복사해 저장하므로, 원본 mention이 나중에 삭제돼도 이 결과는 영향받지 않는다."""
+    items = build_news_items(mentions, own_brands, now=now)
+
+    channel_counts: dict[str, int] = {}
+    channel_items: dict[str, list] = {}
+    for it in items:
+        ch = it["channel"]
+        channel_counts[ch] = channel_counts.get(ch, 0) + 1
+        channel_items.setdefault(ch, []).append(it)
+
+    channel_top_news = {
+        ch: [_archive_item(it) for it in group[:3]] for ch, group in channel_items.items()
+    }
+
+    def _top_by_brand(brand_set: set) -> list:
+        return [_archive_item(it) for it in items if it["firm"] in brand_set][:5]
+
+    return {
+        "channel_counts": channel_counts,
+        "channel_top_news": channel_top_news,
+        "own_brand_news": _top_by_brand(own_brands),
+        "competitor_news": _top_by_brand(competitor_brands),
+        "market_news": _top_by_brand(market_brands),
+        "total_count": len(items),
+    }

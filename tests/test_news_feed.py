@@ -184,3 +184,87 @@ def test_build_issues_live_true_if_any_article_recent():
 
     assert len(issues) == 1
     assert issues[0]["live"] is True
+
+
+def test_competitor_brand_names_returns_only_competitor_role(monkeypatch):
+    monkeypatch.setattr(news_feed, "load_keywords", lambda: {"brands": [
+        {"name": "프롭티어", "role": "own"},
+        {"name": "직방", "role": "competitor"},
+        {"name": "AI", "role": "market"},
+    ]})
+
+    assert news_feed.competitor_brand_names() == {"직방"}
+
+
+def test_market_brand_names_returns_only_market_role(monkeypatch):
+    monkeypatch.setattr(news_feed, "load_keywords", lambda: {"brands": [
+        {"name": "프롭티어", "role": "own"},
+        {"name": "직방", "role": "competitor"},
+        {"name": "AI", "role": "market"},
+    ]})
+
+    assert news_feed.market_brand_names() == {"AI"}
+
+
+def _mention_full(title, brand, channel, collected_at, mention_id):
+    return {
+        "id": mention_id, "title": title, "brand": brand, "url": f"https://x/{mention_id}",
+        "collected_at": collected_at, "snippet": "", "content": "", "summary": "",
+        "channel": channel, "posted_at": "2026.08.10",
+    }
+
+
+def test_build_news_items_includes_channel_and_posted_at_fields():
+    mentions = [_mention_full("제목", "직방", "네이버뉴스API", "2026-08-10 09:00:00", 1)]
+
+    items = news_feed.build_news_items(mentions, own_brands=set())
+
+    assert items[0]["channel"] == "네이버뉴스API"
+    assert items[0]["posted_at"] == "2026.08.10"
+
+
+def test_build_briefing_archive_content_splits_by_brand_role():
+    mentions = [
+        _mention_full("프롭티어 신규 서비스", "프롭티어", "네이버", "2026-08-10 09:00:00", 1),
+        _mention_full("직방 매물 공개", "직방", "구글", "2026-08-10 10:00:00", 2),
+        _mention_full("AI 시장 동향", "AI", "매경API", "2026-08-10 11:00:00", 3),
+    ]
+
+    result = news_feed.build_briefing_archive_content(
+        mentions, own_brands={"프롭티어"}, competitor_brands={"직방"}, market_brands={"AI"},
+    )
+
+    assert result["own_brand_news"][0]["title"] == "프롭티어 신규 서비스"
+    assert result["competitor_news"][0]["title"] == "직방 매물 공개"
+    assert result["market_news"][0]["title"] == "AI 시장 동향"
+    assert result["total_count"] == 3
+
+
+def test_build_briefing_archive_content_channel_counts_and_top_news():
+    mentions = [
+        _mention_full("기사1", "직방", "네이버", "2026-08-10 09:00:00", 1),
+        _mention_full("기사2", "다방", "네이버", "2026-08-10 10:00:00", 2),
+        _mention_full("기사3", "직방", "구글", "2026-08-10 11:00:00", 3),
+    ]
+
+    result = news_feed.build_briefing_archive_content(
+        mentions, own_brands=set(), competitor_brands={"직방", "다방"}, market_brands=set(),
+    )
+
+    assert result["channel_counts"] == {"네이버": 2, "구글": 1}
+    assert len(result["channel_top_news"]["네이버"]) == 2
+    assert len(result["channel_top_news"]["구글"]) == 1
+
+
+def test_build_briefing_archive_content_limits_each_section_to_top_n():
+    mentions = [
+        _mention_full(f"직방 기사{i}", "직방", "네이버", f"2026-08-10 0{i}:00:00", i)
+        for i in range(1, 8)
+    ]
+
+    result = news_feed.build_briefing_archive_content(
+        mentions, own_brands=set(), competitor_brands={"직방"}, market_brands=set(),
+    )
+
+    assert len(result["competitor_news"]) == 5
+    assert len(result["channel_top_news"]["네이버"]) == 3
