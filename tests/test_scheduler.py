@@ -26,6 +26,10 @@ def _reset(monkeypatch):
     monkeypatch.setattr(scheduler, "_last_fired", "")
     monkeypatch.setattr(scheduler, "_last_fired_policy", "")
     monkeypatch.setattr(scheduler, "_last_fired_naver_news", "")
+    monkeypatch.setattr(scheduler, "_last_fired_mk_news", "")
+    # 매경 API 스케줄은 이 스케줄을 직접 테스트하는 케이스가 아니면 빈 스케줄로
+    # 고정해, 다른 tick 테스트가 실제 데이터 파일 유무에 좌우되지 않게 한다.
+    monkeypatch.setattr(scheduler, "load_mk_news_collection_schedule", lambda: {"times": []})
     # 신규 게시물/정책/네이버뉴스 스케줄과 무관한 PDF 요약 미리 생성/자동 벡터화 tick은
     # 실제 Gemini/DB를 건드리므로, 이 tick들을 직접 테스트하는 케이스가 아니면 아무 일도
     # 하지 않게 한다.
@@ -199,6 +203,77 @@ def test_tick_swallows_exception_from_naver_news_collection(monkeypatch, caplog)
         scheduler._tick()
 
     assert scheduler._last_fired_naver_news == "2026-07-16 09:00"
+    assert any("오류" in record.message for record in caplog.records)
+
+
+def test_tick_mk_news_fires_on_its_own_independent_schedule(monkeypatch):
+    _reset(monkeypatch)
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+    monkeypatch.setattr(scheduler, "load_collection_schedule", lambda: {"times": []})
+    monkeypatch.setattr(scheduler, "load_policy_collection_schedule", lambda: {"times": []})
+    monkeypatch.setattr(scheduler, "load_naver_news_collection_schedule", lambda: {"times": []})
+    monkeypatch.setattr(scheduler, "load_mk_news_collection_schedule", lambda: {"times": ["09:00"]})
+
+    calls = []
+    monkeypatch.setattr(
+        scheduler.collector, "start_background_collection", lambda trigger: calls.append(("brand", trigger))
+    )
+    monkeypatch.setattr(
+        scheduler.collector, "start_background_policy_collection",
+        lambda days, trigger: calls.append(("policy", trigger)) or "run-1",
+    )
+    monkeypatch.setattr(
+        scheduler.collector, "start_background_naver_news_collection",
+        lambda trigger: calls.append(("naver_news", trigger)),
+    )
+    monkeypatch.setattr(
+        scheduler.collector, "start_background_mk_news_collection",
+        lambda trigger: calls.append(("mk_news", trigger)),
+    )
+
+    scheduler._tick()
+
+    assert calls == [("mk_news", "자동")]
+    assert scheduler._last_fired_mk_news == "2026-07-16 09:00"
+
+
+def test_tick_mk_news_does_not_fire_twice_for_same_minute(monkeypatch):
+    _reset(monkeypatch)
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+    monkeypatch.setattr(scheduler, "load_collection_schedule", lambda: {"times": []})
+    monkeypatch.setattr(scheduler, "load_policy_collection_schedule", lambda: {"times": []})
+    monkeypatch.setattr(scheduler, "load_naver_news_collection_schedule", lambda: {"times": []})
+    monkeypatch.setattr(scheduler, "load_mk_news_collection_schedule", lambda: {"times": ["09:00"]})
+
+    calls = []
+    monkeypatch.setattr(
+        scheduler.collector, "start_background_mk_news_collection",
+        lambda trigger: calls.append(trigger),
+    )
+
+    scheduler._tick()
+    scheduler._tick()
+
+    assert len(calls) == 1
+
+
+def test_tick_swallows_exception_from_mk_news_collection(monkeypatch, caplog):
+    _reset(monkeypatch)
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+    monkeypatch.setattr(scheduler, "load_collection_schedule", lambda: {"times": []})
+    monkeypatch.setattr(scheduler, "load_policy_collection_schedule", lambda: {"times": []})
+    monkeypatch.setattr(scheduler, "load_naver_news_collection_schedule", lambda: {"times": []})
+    monkeypatch.setattr(scheduler, "load_mk_news_collection_schedule", lambda: {"times": ["09:00"]})
+
+    def boom(trigger):
+        raise RuntimeError("mk news collection failed")
+
+    monkeypatch.setattr(scheduler.collector, "start_background_mk_news_collection", boom)
+
+    with caplog.at_level("ERROR", logger="hana_p.scheduler"):
+        scheduler._tick()
+
+    assert scheduler._last_fired_mk_news == "2026-07-16 09:00"
     assert any("오류" in record.message for record in caplog.records)
 
 

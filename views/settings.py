@@ -19,12 +19,14 @@ from utils import (
     load_channel_visibility,
     load_collection_schedule,
     load_keywords,
+    load_mk_news_collection_schedule,
     load_naver_news_collection_schedule,
     load_policy_collection_schedule,
     load_vector_collection_schedule,
     save_channel_visibility,
     save_collection_schedule,
     save_keywords,
+    save_mk_news_collection_schedule,
     save_naver_news_collection_schedule,
     save_policy_collection_schedule,
     save_vector_collection_schedule,
@@ -686,10 +688,89 @@ def _render_policy_collection_tab():
         st.caption("아직 수집 이력이 없습니다.")
 
 
+@st.fragment(run_every=2)
+def _show_mk_news_collection_progress(run_id):
+    logs = [l for l in db.get_run_logs(limit=500) if l["run_id"] == run_id][::-1]
+    if logs:
+        lines = [f"{e['brand']}: {_format_entry_status(e)}" for e in logs]
+        st.code("\n".join(lines), language=None, height=200)
+    if collector.active_mk_news_run_id() == run_id:
+        st.caption(f"🔄 진행 중... ({len(logs):,}건 완료)")
+    else:
+        ok_count = sum(1 for e in logs if e["ok"])
+        st.success(f"수집 완료: {len(logs):,}건 실행, 성공 {ok_count:,}건")
+
+
+def _render_mk_news_collection_tab():
+    st.caption(
+        "매일경제 뉴스 검색 API(IP 화이트리스트 인증)로 수집합니다. 키워드 관리의 "
+        "키워드를 그대로 사용하며, 다른 채널과 별도의 독립된 스케줄을 가집니다."
+    )
+    st.caption(
+        "⚠️ 이 API는 원문 URL 패턴을 제공하지 않아 링크 없이 제목·본문만 저장됩니다. "
+        "URL은 채널과 무관하게 전체에서 중복 제거되므로, 신규 건수가 0이어도 오류가 "
+        "아닐 수 있습니다."
+    )
+
+    st.subheader("⏰ 수집 스케줄")
+    mk_news_sched_cfg = load_mk_news_collection_schedule()
+    mk_news_times_text = st.text_input(
+        "수집 시각 (/로 구분)", value="/".join(mk_news_sched_cfg["times"]),
+        placeholder="예: 09:00/13:00/17:00", key="mk_news_sched_times_text",
+    )
+    if st.button("💾 저장", key="mk_news_sched_save"):
+        tokens = [t.strip() for t in mk_news_times_text.split("/") if t.strip()]
+        invalid = [t for t in tokens if not _TIME_RE.match(t)]
+        if invalid:
+            st.error(f"HH:MM 형식이 아닌 시각이 있습니다: {', '.join(invalid)}")
+        else:
+            seen = []
+            for t in tokens:
+                if t not in seen:
+                    seen.append(t)
+            save_mk_news_collection_schedule({"times": seen})
+            st.rerun()
+    if mk_news_sched_cfg["times"]:
+        st.caption(f"등록된 시각: {', '.join(mk_news_sched_cfg['times'])}")
+    else:
+        st.caption("등록된 수집 시각이 없습니다.")
+
+    st.divider()
+    running_mk_news_run_id = collector.active_mk_news_run_id()
+    if running_mk_news_run_id is None:
+        if st.button("🔄 지금 수집", type="primary", key="mk_news_collect_now"):
+            started_run_id = collector.start_background_mk_news_collection(trigger="수동")
+            if started_run_id:
+                db.log_activity(st.session_state.get("_client_ip", ""), "설정 · 데이터 수집", "매경 API 수집 실행")
+                st.session_state["watched_mk_news_run_id"] = started_run_id
+                st.rerun()
+            else:
+                st.warning("이미 다른 매경 API 수집이 진행 중입니다.")
+    else:
+        st.info("🔄 수집이 진행 중입니다. 페이지를 벗어나거나 새로고침해도 계속 진행됩니다.")
+        st.session_state["watched_mk_news_run_id"] = running_mk_news_run_id
+
+    display_mk_news_run_id = running_mk_news_run_id or st.session_state.get("watched_mk_news_run_id")
+    if display_mk_news_run_id:
+        _show_mk_news_collection_progress(display_mk_news_run_id)
+
+    st.divider()
+    st.subheader("📜 수집 이력")
+    mk_news_batches = db.get_run_batches(limit=50, channels=["매경API"])
+    if mk_news_batches:
+        mk_news_batch_df = pd.DataFrame(mk_news_batches)[
+            ["ran_at", "trigger", "brands", "combinations", "fetched", "inserted", "skipped", "ok", "message"]
+        ]
+        st.dataframe(mk_news_batch_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("아직 수집 이력이 없습니다.")
+
+
 def _render_data_collection():
     _render_lazy_tabs(
-        ["📰 신규 게시물", "📡 네이버뉴스 API", "🏛️ 정부 정책"], "dc_tab",
-        [_render_brand_collection_tab, _render_naver_news_collection_tab, _render_policy_collection_tab],
+        ["📰 신규 게시물", "📡 네이버뉴스 API", "🏛️ 정부 정책", "📈 매경 API"], "dc_tab",
+        [_render_brand_collection_tab, _render_naver_news_collection_tab, _render_policy_collection_tab,
+         _render_mk_news_collection_tab],
     )
 
 
@@ -776,7 +857,7 @@ def _render_brand_lookup_tab():
     st.subheader("🗃 수집 데이터 조회")
 
     brands = ["전체"] + [b["name"] for b in load_keywords()["brands"]]
-    channels = ["전체", "네이버", "구글", "다음", "커뮤니티", "네이버뉴스API"]
+    channels = ["전체", "네이버", "구글", "다음", "커뮤니티", "네이버뉴스API", "매경API"]
 
     col_brand, col_channel, col_size = st.columns(3)
     with col_brand:

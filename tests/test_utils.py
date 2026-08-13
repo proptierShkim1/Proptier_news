@@ -7,12 +7,14 @@ from utils import (
     escape_html,
     load_channel_visibility,
     load_collection_schedule,
+    load_mk_news_collection_schedule,
     load_naver_news_collection_schedule,
     load_policy_collection_schedule,
     load_vector_collection_schedule,
     resolve_relative_korean_date,
     save_channel_visibility,
     save_collection_schedule,
+    save_mk_news_collection_schedule,
     save_naver_news_collection_schedule,
     save_policy_collection_schedule,
     save_vector_collection_schedule,
@@ -103,6 +105,24 @@ def test_naver_news_collection_schedule_is_independent_of_other_schedules(tmp_pa
     assert load_naver_news_collection_schedule() == {"times": ["11:00"]}
 
 
+def test_load_mk_news_collection_schedule_defaults_when_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        utils, "MK_NEWS_COLLECTION_SCHEDULE_FILE",
+        tmp_path / "mk_news_collection_schedule.json",
+    )
+
+    assert load_mk_news_collection_schedule() == {"times": []}
+
+
+def test_save_mk_news_collection_schedule_persists_times(tmp_path, monkeypatch):
+    schedule_file = tmp_path / "mk_news_collection_schedule.json"
+    monkeypatch.setattr(utils, "MK_NEWS_COLLECTION_SCHEDULE_FILE", schedule_file)
+
+    save_mk_news_collection_schedule({"times": ["11:30"]})
+
+    assert json.loads(schedule_file.read_text(encoding="utf-8")) == {"times": ["11:30"]}
+
+
 def test_load_vector_collection_schedule_defaults_when_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(utils, "VECTOR_COLLECTION_SCHEDULE_FILE", tmp_path / "vector_collection_schedule.json")
 
@@ -127,17 +147,22 @@ def test_vector_collection_schedule_is_independent_of_other_schedules(tmp_path, 
         utils, "NAVER_NEWS_COLLECTION_SCHEDULE_FILE", tmp_path / "naver_news_collection_schedule.json"
     )
     monkeypatch.setattr(
+        utils, "MK_NEWS_COLLECTION_SCHEDULE_FILE", tmp_path / "mk_news_collection_schedule.json"
+    )
+    monkeypatch.setattr(
         utils, "VECTOR_COLLECTION_SCHEDULE_FILE", tmp_path / "vector_collection_schedule.json"
     )
 
     save_collection_schedule({"times": ["09:00"]})
     save_policy_collection_schedule({"times": ["10:00"]})
     save_naver_news_collection_schedule({"times": ["11:00"]})
+    save_mk_news_collection_schedule({"times": ["11:30"]})
     save_vector_collection_schedule({"times": ["12:00"]})
 
     assert load_collection_schedule() == {"times": ["09:00"]}
     assert load_policy_collection_schedule() == {"times": ["10:00"]}
     assert load_naver_news_collection_schedule() == {"times": ["11:00"]}
+    assert load_mk_news_collection_schedule() == {"times": ["11:30"]}
     assert load_vector_collection_schedule() == {"times": ["12:00"]}
 
 

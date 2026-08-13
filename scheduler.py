@@ -13,6 +13,7 @@ import summarizer
 import vectorizer
 from utils import (
     load_collection_schedule,
+    load_mk_news_collection_schedule,
     load_naver_news_collection_schedule,
     load_policy_collection_schedule,
     load_vector_collection_schedule,
@@ -27,6 +28,7 @@ _PDF_PRESUMMARY_INTERVAL_MINUTES = 5
 _last_fired = ""
 _last_fired_policy = ""
 _last_fired_naver_news = ""
+_last_fired_mk_news = ""
 _last_fired_vectorize = ""
 _last_pdf_presummary: datetime | None = None
 _lock = threading.Lock()
@@ -106,6 +108,25 @@ def _tick_naver_news() -> None:
         logger.exception("스케줄러(네이버뉴스 API) 반복 실행 중 오류 발생")
 
 
+def _tick_mk_news() -> None:
+    """매경 API 자동 수집 체크. 다른 채널과 독립된 스케줄/예외 처리."""
+    global _last_fired_mk_news
+    try:
+        now = datetime.now()
+        minute_key = now.strftime("%Y-%m-%d %H:%M")
+        with _lock:
+            already_fired = minute_key == _last_fired_mk_news
+        if not already_fired:
+            schedules = load_mk_news_collection_schedule()["times"]
+            if schedule_matches_now(schedules, now):
+                with _lock:
+                    _last_fired_mk_news = minute_key
+                started_run_id = collector.start_background_mk_news_collection(trigger="자동")
+                logger.info("매경 API 자동 수집 시작 (run_id=%s)", started_run_id)
+    except Exception:
+        logger.exception("스케줄러(매경 API) 반복 실행 중 오류 발생")
+
+
 def _tick_pdf_presummary() -> None:
     """PDF 보고서 상위 5개 항목의 AI 요약을 백그라운드에서 미리 만들어 DB에 저장한다.
     렌더링 시점(views/report.py)에 처음 요약을 만들면 Gemini 호출을 기다려야 해서 첫
@@ -152,11 +173,12 @@ def _tick_auto_vectorize() -> None:
 
 
 def _tick() -> None:
-    """스케줄러 한 사이클 분량의 로직. 신규 게시물/정부 정책/네이버뉴스 API는 각자
-    독립된 스케줄로 체크한다."""
+    """스케줄러 한 사이클 분량의 로직. 신규 게시물/정부 정책/네이버뉴스 API/매경 API는
+    각자 독립된 스케줄로 체크한다."""
     _tick_new_posts()
     _tick_policy()
     _tick_naver_news()
+    _tick_mk_news()
     _tick_pdf_presummary()
     _tick_auto_vectorize()
 

@@ -15,6 +15,7 @@ from crawlers import google as google_crawler
 from crawlers import hf as hf_crawler
 from crawlers import hug as hug_crawler
 from crawlers import lh as lh_crawler
+from crawlers import mk_news_api as mk_news_api_crawler
 from crawlers import molit as molit_crawler
 from crawlers import naver as naver_crawler
 from crawlers import naver_news_api as naver_news_api_crawler
@@ -277,9 +278,68 @@ def run_naver_news_collection(
     return log_entries
 
 
+_MK_NEWS_CHANNEL = "매경API"
+
+_mk_news_state_lock = threading.Lock()
+_active_mk_news_run_id: str | None = None
+
+
+def active_mk_news_run_id() -> str | None:
+    """신규 게시물·정책·네이버뉴스 API와 독립된 매경 API 수집 실행 상태를 추적한다."""
+    with _mk_news_state_lock:
+        return _active_mk_news_run_id
+
+
+def start_background_mk_news_collection(trigger: str = "수동") -> str | None:
+    """이미 진행 중인 매경 API 수집이 없으면 데몬 스레드로 시작하고 run_id를
+    반환한다. 다른 채널 수집과는 독립된 락이므로 서로 동시에 실행될 수 있다."""
+    global _active_mk_news_run_id
+    with _mk_news_state_lock:
+        if _active_mk_news_run_id is not None:
+            return None
+        run_id = str(uuid.uuid4())[:8]
+        _active_mk_news_run_id = run_id
+
+    def _worker():
+        global _active_mk_news_run_id
+        try:
+            run_mk_news_collection(trigger=trigger, run_id=run_id)
+        finally:
+            with _mk_news_state_lock:
+                _active_mk_news_run_id = None
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return run_id
+
+
+def run_mk_news_collection(
+    trigger: str = "수동", on_progress=None, run_id: str | None = None
+) -> list[dict]:
+    """등록된 모든 브랜드 키워드로 매경 뉴스 검색 API를 수집한다. 다른 채널과
+    독립된 run_id/이력을 갖되, 노이즈/문맥/제외 필터링과 저장 스키마(_collect_one,
+    mentions/run_logs)는 그대로 재사용한다."""
+    cfg = load_keywords()
+    context_words = cfg.get("context") or []
+    exclude_terms = cfg.get("exclude") or []
+    run_id = run_id or str(uuid.uuid4())[:8]
+    brands = cfg["brands"]
+    log_entries = []
+    for i, brand_entry in enumerate(brands):
+        entry = _collect_one(
+            brand_entry, _MK_NEWS_CHANNEL, mk_news_api_crawler.search,
+            trigger, run_id, context_words, exclude_terms,
+        )
+        log_entries.append(entry)
+        if on_progress is not None:
+            on_progress(entry)
+        if i < len(brands) - 1:
+            time.sleep(_REQUEST_DELAY_SECONDS)
+    return log_entries
+
+
 def run_backfill(days: int = 30, max_pages: int = 10, trigger: str = "백필") -> list[dict]:
-    """일회성 과거 데이터 백필. 페이지네이션/기간 파라미터를 지원하는 세 채널
-    (구글/다음/네이버뉴스API)만 대상으로, 각자 최대한 과거 `days`일치를 끌어온다.
+    """일회성 과거 데이터 백필. 페이지네이션/기간 파라미터를 지원하는 네 채널
+    (구글/다음/네이버뉴스API/매경API)만 대상으로, 각자 최대한 과거 `days`일치를 끌어온다.
     네이버(블로그·카페)/커뮤니티는 페이지네이션이 없어 백필 효과가 없으므로
     대상에서 제외한다(평소 "지금 수집"과 동일한 결과만 나옴). UI/스케줄에는
     연결하지 않고 필요할 때 직접 호출해서 쓰는 운영용 함수다."""
@@ -291,6 +351,9 @@ def run_backfill(days: int = 30, max_pages: int = 10, trigger: str = "백필") -
         "구글": lambda term: google_crawler.search(term, recency_days=days),
         "다음": lambda term: daum_crawler.search(term, recency_days=days, max_pages=max_pages),
         "네이버뉴스API": lambda term: naver_news_api_crawler.search(
+            term, max_pages=max_pages, recency_days=days
+        ),
+        "매경API": lambda term: mk_news_api_crawler.search(
             term, max_pages=max_pages, recency_days=days
         ),
     }
