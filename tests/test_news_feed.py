@@ -1,5 +1,6 @@
-from datetime import datetime
+from datetime import date, datetime
 
+import db
 import news_feed
 
 
@@ -268,3 +269,80 @@ def test_build_briefing_archive_content_limits_each_section_to_top_n():
 
     assert len(result["competitor_news"]) == 5
     assert len(result["channel_top_news"]["네이버"]) == 3
+
+
+def test_archive_pending_briefings_archives_all_past_unarchived_dates(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    monkeypatch.setattr(news_feed, "load_keywords", lambda: {"brands": [
+        {"name": "직방", "role": "competitor"},
+    ]})
+    db.insert_mention({
+        "brand": "직방", "channel": "네이버", "source_detail": "", "title": "제목1",
+        "url": "https://x/1", "snippet": "", "posted_at": "", "collected_at": "2026-08-10 09:00:00",
+    })
+    db.insert_mention({
+        "brand": "직방", "channel": "네이버", "source_detail": "", "title": "제목2",
+        "url": "https://x/2", "snippet": "", "posted_at": "", "collected_at": "2026-08-11 09:00:00",
+    })
+
+    class _FixedDate(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 8, 12)
+
+    monkeypatch.setattr(news_feed, "date", _FixedDate)
+
+    archived = news_feed.archive_pending_briefings()
+
+    assert set(archived) == {"2026-08-10", "2026-08-11"}
+    assert db.get_briefing_archive("2026-08-10") is not None
+    assert db.get_briefing_archive("2026-08-11") is not None
+
+
+def test_archive_pending_briefings_never_archives_today(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    monkeypatch.setattr(news_feed, "load_keywords", lambda: {"brands": []})
+    db.insert_mention({
+        "brand": "직방", "channel": "네이버", "source_detail": "", "title": "제목1",
+        "url": "https://x/1", "snippet": "", "posted_at": "", "collected_at": "2026-08-12 09:00:00",
+    })
+
+    class _FixedDate(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 8, 12)
+
+    monkeypatch.setattr(news_feed, "date", _FixedDate)
+
+    archived = news_feed.archive_pending_briefings()
+
+    assert archived == []
+    assert db.get_briefing_archive("2026-08-12") is None
+
+
+def test_archive_pending_briefings_skips_already_archived_dates(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    monkeypatch.setattr(news_feed, "load_keywords", lambda: {"brands": []})
+    db.insert_mention({
+        "brand": "직방", "channel": "네이버", "source_detail": "", "title": "제목1",
+        "url": "https://x/1", "snippet": "", "posted_at": "", "collected_at": "2026-08-10 09:00:00",
+    })
+
+    class _FixedDate(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 8, 12)
+
+    monkeypatch.setattr(news_feed, "date", _FixedDate)
+    news_feed.archive_pending_briefings()
+
+    archived_again = news_feed.archive_pending_briefings()
+
+    assert archived_again == []
+
+
+def test_archive_pending_briefings_returns_empty_when_no_mentions_at_all(tmp_path, monkeypatch):
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    monkeypatch.setattr(news_feed, "load_keywords", lambda: {"brands": []})
+
+    assert news_feed.archive_pending_briefings() == []
