@@ -498,3 +498,52 @@ def test_count_mention_vector_index_and_policy_vector_index_start_at_zero(tmp_pa
 
     assert db.count_mention_vector_index() == 0
     assert db.count_policy_vector_index() == 0
+
+
+def _briefing_archive_record(date="2026-08-10"):
+    return {
+        "date": date,
+        "channel_counts": {"네이버": 3, "매경API": 2},
+        "channel_top_news": {
+            "네이버": [{
+                "title": "제목1", "url": "https://x/1", "brand": "직방",
+                "channel": "네이버", "posted_at": "2026.08.10", "signal": "🏢 매물",
+                "desc": "요약1",
+            }],
+        },
+        "own_brand_news": [{
+            "title": "프롭티어 소식", "url": "https://x/2", "brand": "프롭티어",
+            "channel": "구글", "posted_at": "2026.08.10", "signal": "📰 일반", "desc": "요약2",
+        }],
+        "competitor_news": [],
+        "market_news": [],
+        "total_count": 5,
+        "archived_at": "2026-08-11 00:05:00",
+    }
+
+
+def test_insert_briefing_archive_then_get_roundtrips_json_fields(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+
+    inserted = db.insert_briefing_archive(_briefing_archive_record())
+
+    assert inserted is True
+    result = db.get_briefing_archive("2026-08-10")
+    assert result["channel_counts"] == {"네이버": 3, "매경API": 2}
+    assert result["own_brand_news"][0]["title"] == "프롭티어 소식"
+    assert result["total_count"] == 5
+
+
+def test_insert_briefing_archive_ignores_duplicate_date(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_briefing_archive(_briefing_archive_record())
+
+    second = db.insert_briefing_archive(_briefing_archive_record())
+
+    assert second is False
+
+
+def test_get_briefing_archive_returns_none_when_not_archived(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+
+    assert db.get_briefing_archive("2026-01-01") is None

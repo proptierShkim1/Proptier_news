@@ -2,6 +2,7 @@
 hana_p — SQLite 저장소 (수집 데이터 + 실행 이력)
 """
 
+import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -112,6 +113,19 @@ CREATE TABLE IF NOT EXISTS activity_log (
 );
 """
 
+_BRIEFING_ARCHIVES_SQL = """
+CREATE TABLE IF NOT EXISTS briefing_archives (
+    date              TEXT PRIMARY KEY,
+    channel_counts    TEXT NOT NULL,
+    channel_top_news  TEXT NOT NULL,
+    own_brand_news    TEXT NOT NULL,
+    competitor_news   TEXT NOT NULL,
+    market_news       TEXT NOT NULL,
+    total_count       INTEGER NOT NULL,
+    archived_at       TEXT NOT NULL
+);
+"""
+
 def _mention_vectors_sql() -> str:
     # rowid = mentions.id로 맞춰서 JOIN으로 원본 행을 바로 가져올 수 있게 한다. VECTOR_DIM을
     # init_db() 호출 시점에 읽어서, 테스트에서 monkeypatch로 작은 차원을 쓸 수 있게 한다.
@@ -145,6 +159,7 @@ def init_db() -> None:
         con.execute(_POLICY_RUN_LOGS_SQL)
         con.execute(_VECTOR_RUN_LOGS_SQL)
         con.execute(_ACTIVITY_LOG_SQL)
+        con.execute(_BRIEFING_ARCHIVES_SQL)
         con.execute(_mention_vectors_sql())
         con.execute(_policy_vectors_sql())
         _ensure_column(con, "mentions", "summary", "TEXT NOT NULL DEFAULT ''")
@@ -637,3 +652,42 @@ def get_policy_events_missing_vector_index(limit: int = 1000) -> list[dict]:
             {"limit": limit},
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def insert_briefing_archive(record: dict) -> bool:
+    """하루치 브리핑을 확정해 저장한다. 이미 그 날짜가 있으면 아무 것도 하지 않고 False —
+    한 번 확정된 브리핑은 이후 채널 노출 설정이나 원본 데이터 변경과 무관하게 고정된다."""
+    init_db()
+    with _connect() as con:
+        cur = con.execute(
+            "INSERT OR IGNORE INTO briefing_archives "
+            "(date, channel_counts, channel_top_news, own_brand_news, competitor_news, "
+            "market_news, total_count, archived_at) "
+            "VALUES (:date, :channel_counts, :channel_top_news, :own_brand_news, "
+            ":competitor_news, :market_news, :total_count, :archived_at)",
+            {
+                "date": record["date"],
+                "channel_counts": json.dumps(record["channel_counts"], ensure_ascii=False),
+                "channel_top_news": json.dumps(record["channel_top_news"], ensure_ascii=False),
+                "own_brand_news": json.dumps(record["own_brand_news"], ensure_ascii=False),
+                "competitor_news": json.dumps(record["competitor_news"], ensure_ascii=False),
+                "market_news": json.dumps(record["market_news"], ensure_ascii=False),
+                "total_count": record["total_count"],
+                "archived_at": record["archived_at"],
+            },
+        )
+        return cur.rowcount > 0
+
+
+def get_briefing_archive(date: str) -> dict | None:
+    """확정된 하루치 브리핑을 반환한다. 아직 확정 안 됐으면 None."""
+    init_db()
+    with _connect() as con:
+        con.row_factory = sqlite3.Row
+        row = con.execute("SELECT * FROM briefing_archives WHERE date = ?", [date]).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        for key in ("channel_counts", "channel_top_news", "own_brand_news", "competitor_news", "market_news"):
+            result[key] = json.loads(result[key])
+        return result
