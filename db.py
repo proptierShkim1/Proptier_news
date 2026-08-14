@@ -217,6 +217,14 @@ def count_mentions() -> int:
         return con.execute("SELECT COUNT(*) FROM mentions").fetchone()[0]
 
 
+def count_mentions_by_brand(brand: str) -> int:
+    init_db()
+    with _connect() as con:
+        return con.execute(
+            "SELECT COUNT(*) FROM mentions WHERE brand = ?", [brand]
+        ).fetchone()[0]
+
+
 def get_mentions(
     brand: str = "", channel: str = "", channels: list | None = None, limit: int = 3000
 ) -> list[dict]:
@@ -353,6 +361,15 @@ def count_policy_events() -> int:
     init_db()
     with _connect() as con:
         return con.execute("SELECT COUNT(*) FROM policy_events").fetchone()[0]
+
+
+def get_policy_source_counts() -> dict:
+    init_db()
+    with _connect() as con:
+        rows = con.execute(
+            "SELECT source, COUNT(*) FROM policy_events GROUP BY source"
+        ).fetchall()
+        return {r[0]: r[1] for r in rows}
 
 
 def get_policy_events(department: str = "", limit: int = 3000) -> list[dict]:

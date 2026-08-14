@@ -1,3 +1,4 @@
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import agent_chat
@@ -224,3 +225,77 @@ def test_ask_with_web_search_returns_fallback_message_when_all_keys_fail(monkeyp
         result = agent_chat.ask_with_web_search([], "화성 이주 계획 알려줘")
 
     assert "실패" in result
+
+
+def test_get_channel_counts_groups_mentions_by_channel(monkeypatch):
+    monkeypatch.setattr(
+        agent_chat.db, "get_mentions_by_collected_date",
+        lambda date: [
+            {"channel": "네이버", "title": "a"},
+            {"channel": "네이버", "title": "b"},
+            {"channel": "매경API", "title": "c"},
+        ],
+    )
+
+    result = agent_chat.get_channel_counts("2026-08-13")
+
+    assert result == {"네이버": 2, "매경API": 1}
+
+
+def test_get_channel_counts_returns_empty_dict_when_no_mentions(monkeypatch):
+    monkeypatch.setattr(agent_chat.db, "get_mentions_by_collected_date", lambda date: [])
+
+    assert agent_chat.get_channel_counts("2026-01-01") == {}
+
+
+def test_get_overview_stats_aggregates_all_counts(monkeypatch):
+    monkeypatch.setattr(agent_chat.db, "count_mentions", lambda: 100)
+    monkeypatch.setattr(agent_chat.db, "count_policy_events", lambda: 40)
+    monkeypatch.setattr(agent_chat.db, "count_mention_vector_index", lambda: 90)
+    monkeypatch.setattr(agent_chat.db, "count_policy_vector_index", lambda: 35)
+    monkeypatch.setattr(agent_chat.db, "get_archived_briefing_dates", lambda: {"2026-08-10", "2026-08-11"})
+
+    result = agent_chat.get_overview_stats()
+
+    assert result == {
+        "total_mentions": 100,
+        "total_policy_events": 40,
+        "vectorized_mentions": 90,
+        "vectorized_policy_events": 35,
+        "archived_briefing_days": 2,
+    }
+
+
+def test_get_brand_mention_count_delegates_to_db(monkeypatch):
+    monkeypatch.setattr(agent_chat.db, "count_mentions_by_brand", lambda brand: 42 if brand == "직방" else 0)
+
+    assert agent_chat.get_brand_mention_count("직방") == 42
+    assert agent_chat.get_brand_mention_count("없는브랜드") == 0
+
+
+def test_get_policy_source_counts_delegates_to_db(monkeypatch):
+    monkeypatch.setattr(agent_chat.db, "get_policy_source_counts", lambda: {"국토부": 5, "LH": 3})
+
+    assert agent_chat.get_policy_source_counts() == {"국토부": 5, "LH": 3}
+
+
+def test_ask_passes_stats_tools_and_todays_date_in_system_instruction(monkeypatch):
+    monkeypatch.setattr(agent_chat.summarizer, "_load_api_keys", lambda: ["key1"])
+    fake_chat = MagicMock()
+    fake_chat.send_message.return_value = MagicMock(text="응답")
+    fake_client = MagicMock()
+    fake_client.chats.create.return_value = fake_chat
+
+    class _FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 8, 13, 15, 0, 0)
+
+    monkeypatch.setattr(agent_chat, "datetime", _FixedDatetime)
+
+    with patch.object(agent_chat.genai, "Client", return_value=fake_client):
+        agent_chat.ask([], "오늘 채널별로 몇 건씩 수집됐어?")
+
+    config = fake_client.chats.create.call_args.kwargs["config"]
+    assert config["tools"] == agent_chat._STATS_TOOLS
+    assert "2026-08-13" in config["system_instruction"]

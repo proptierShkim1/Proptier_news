@@ -66,7 +66,7 @@ def render():
                 is_current and turn["role"] == "assistant"
                 and turn.get("insufficient") and not turn.get("web_search_done")
             ):
-                if st.button("\U0001F310 웹 검색으로 다시 답변받기", key=f"web_search_btn_{idx}"):
+                if st.button("\U0001F310 Hybrid Search 실행", key=f"web_search_btn_{idx}"):
                     question = viewed["messages"][idx - 1]["content"]
                     with st.spinner("웹 검색 중..."):
                         web_reply = agent_chat.ask_with_web_search(viewed["messages"][:idx - 1], question)

@@ -14,9 +14,12 @@ GEMINI_MODEL)을 재사용한다.
 추가되므로 매 질문마다 다른 검색 결과를 반영할 수 있다.
 """
 
+from datetime import datetime
+
 from google import genai
 from google.genai import types
 
+import db
 import summarizer
 
 _BASE_SYSTEM_INSTRUCTION = (
@@ -95,6 +98,63 @@ def _send_with_key_failover(system_instruction: str, seeded_history: list, messa
     return "응답 생성에 실패했습니다. 잠시 후 다시 시도해주세요."
 
 
+def get_channel_counts(date: str) -> dict:
+    """주어진 날짜에 채널별로 몇 건씩 뉴스가 수집됐는지 알려준다.
+
+    Args:
+        date: 조회할 날짜, YYYY-MM-DD 형식 (예: "2026-08-13").
+
+    Returns:
+        채널 이름을 키로, 그 채널에서 수집된 건수를 값으로 갖는 딕셔너리.
+    """
+    mentions = db.get_mentions_by_collected_date(date)
+    counts: dict[str, int] = {}
+    for m in mentions:
+        counts[m["channel"]] = counts.get(m["channel"], 0) + 1
+    return counts
+
+
+def get_overview_stats() -> dict:
+    """사내 데이터 수집 현황을 한눈에 보여주는 전체 지표 스냅샷을 반환한다.
+
+    Returns:
+        총 뉴스 수집 건수(total_mentions), 총 정책 보도자료 수집 건수(total_policy_events),
+        벡터 검색 색인이 완료된 뉴스/정책 건수(vectorized_mentions/vectorized_policy_events),
+        확정된 브리핑 날짜 수(archived_briefing_days)를 담은 딕셔너리.
+    """
+    return {
+        "total_mentions": db.count_mentions(),
+        "total_policy_events": db.count_policy_events(),
+        "vectorized_mentions": db.count_mention_vector_index(),
+        "vectorized_policy_events": db.count_policy_vector_index(),
+        "archived_briefing_days": len(db.get_archived_briefing_dates()),
+    }
+
+
+def get_brand_mention_count(brand: str) -> int:
+    """특정 브랜드(회사명)가 지금까지 누적으로 몇 번 언급됐는지 알려준다.
+
+    Args:
+        brand: 조회할 브랜드명 (예: "직방", "프롭티어", "다방").
+
+    Returns:
+        해당 브랜드로 수집된 mentions 누적 건수.
+    """
+    return db.count_mentions_by_brand(brand)
+
+
+def get_policy_source_counts() -> dict:
+    """정부 정책 보도자료가 기관(소스)별로 몇 건씩 수집됐는지 알려준다.
+
+    Returns:
+        기관명(예: "국토부", "LH", "한국부동산원")을 키로, 수집 건수를 값으로 갖는 딕셔너리.
+    """
+    return db.get_policy_source_counts()
+
+
+_STATS_TOOLS = [get_channel_counts, get_overview_stats, get_brand_mention_count, get_policy_source_counts]
+
+
 def is_grounding_sufficient(
     mention_hits: list[dict], policy_hits: list[dict],
     threshold: float = _INSUFFICIENT_DISTANCE_THRESHOLD,
@@ -111,10 +171,17 @@ def ask(history: list[dict], message: str, context: str = "") -> str:
     """history는 이번 메시지를 제외한 이전 턴들 [{"role": "user"|"assistant", "content": str}, ...].
     context가 있으면 이번 턴의 system_instruction에 참고 자료로 덧붙인다(build_grounding_context
     결과). 매번 새 Client/chat 세션을 만들어 history를 주입한 뒤 message를 보내고 응답 텍스트를
-    반환한다. 키가 없거나 모든 키 호출이 실패해도 예외를 던지지 않고 에러 메시지 문자열을 반환한다."""
-    system_instruction = _BASE_SYSTEM_INSTRUCTION
+    반환한다. 키가 없거나 모든 키 호출이 실패해도 예외를 던지지 않고 에러 메시지 문자열을 반환한다.
+
+    _STATS_TOOLS(채널별 수집 건수·전체 현황·브랜드 언급 건수·정책 소스별 건수)를 함수
+    호출 도구로 붙여서, 벡터 검색으로는 답할 수 없는 집계/통계 질문("오늘 채널별로 몇
+    건씩 모였어?" 등)에도 실제 숫자로 답할 수 있게 한다. 오늘 날짜를 시스템 인스트럭션에
+    명시해, "오늘"/"어제" 같은 상대 표현을 모델이 직접 절대 날짜로 변환해 도구를 호출할
+    수 있게 한다."""
+    today_note = f" 오늘 날짜는 {datetime.now().strftime('%Y-%m-%d')}이야."
+    system_instruction = _BASE_SYSTEM_INSTRUCTION + today_note
     system_instruction += _WITH_CONTEXT_NOTE + context if context else _NO_CONTEXT_NOTE
-    return _send_with_key_failover(system_instruction, _seed_history(history), message)
+    return _send_with_key_failover(system_instruction, _seed_history(history), message, tools=_STATS_TOOLS)
 
 
 def ask_with_web_search(history: list[dict], message: str) -> str:

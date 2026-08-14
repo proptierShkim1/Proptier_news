@@ -18,6 +18,17 @@ def _mention(url="https://x/1", brand="직방", channel="네이버"):
     }
 
 
+def test_count_mentions_by_brand_counts_only_that_brand(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1", brand="직방"))
+    db.insert_mention(_mention(url="https://x/2", brand="직방"))
+    db.insert_mention(_mention(url="https://x/3", brand="다방"))
+
+    assert db.count_mentions_by_brand("직방") == 2
+    assert db.count_mentions_by_brand("다방") == 1
+    assert db.count_mentions_by_brand("없는브랜드") == 0
+
+
 def test_get_mentions_channels_filter_matches_any_of_the_given_channels(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     db.insert_mention(_mention(url="https://x/1", channel="네이버"))
@@ -115,6 +126,15 @@ def test_count_policy_events_returns_total_row_count(tmp_path, monkeypatch):
     db.insert_policy_event(_policy_event(url="https://x/2"))
 
     assert db.count_policy_events() == 2
+
+
+def test_get_policy_source_counts_groups_by_source(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_policy_event({**_policy_event(url="https://x/1"), "source": "국토부"})
+    db.insert_policy_event({**_policy_event(url="https://x/2"), "source": "국토부"})
+    db.insert_policy_event({**_policy_event(url="https://x/3"), "source": "LH"})
+
+    assert db.get_policy_source_counts() == {"국토부": 2, "LH": 1}
 
 
 def test_get_policy_events_filters_by_department_and_orders_by_announced_at_desc(tmp_path, monkeypatch):
