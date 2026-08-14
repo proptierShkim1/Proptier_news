@@ -1,45 +1,95 @@
 from datetime import date
 
-import pandas as pd
 import streamlit as st
 
 import db
 import news_feed
 import theme
+from utils import escape_html
+
+_MEDALS = ["🥇", "🥈", "🥉"]
 
 
-def _render_news_list(title: str, items: list) -> None:
-    st.markdown(f"#### {title}")
+def _rank(i: int) -> str:
+    return _MEDALS[i] if i < 3 else str(i + 1)
+
+
+def _archive_card_html(item: dict, rank: str) -> str:
+    desc_html = (
+        f'<ul class="sl-desc"><li>{escape_html(item["desc"])}</li></ul>' if item.get("desc") else ""
+    )
+    meta = " · ".join(escape_html(v) for v in (item.get("brand"), item.get("channel"), item.get("posted_at")) if v)
+    return f"""
+    <div class="sl-item">
+      <div class="sl-signal">{escape_html(item.get('signal', ''))}</div>
+      <div class="sl-head"><span class="sl-rank">{rank}</span>
+        <a class="sl-title" href="{escape_html(item['url'])}" target="_blank">{escape_html(item['title'])}</a></div>
+      {desc_html}
+      <div class="sl-meta">{meta}</div>
+    </div>
+    """
+
+
+def _render_news_list(title: str, note: str, items: list) -> None:
+    st.markdown(f'<h2 class="sec">{title}</h2>', unsafe_allow_html=True)
+    st.markdown(f'<div class="sec-note">{note}</div>', unsafe_allow_html=True)
     if not items:
         st.caption("해당 소식 없음")
         return
-    for it in items:
-        st.markdown(f"- [{it['title']}]({it['url']}) · {it['brand']} · {it['posted_at']}")
-        if it.get("desc"):
-            st.caption(it["desc"])
+    for i, it in enumerate(items):
+        st.markdown(_archive_card_html(it, _rank(i)), unsafe_allow_html=True)
+
+
+def _render_channel_counts(date_str: str, total_count: int, counts: dict) -> None:
+    st.markdown(f'<h2 class="sec">채널별 수집 현황 ({date_str})</h2>', unsafe_allow_html=True)
+    st.markdown('<div class="sec-note">그날 채널별로 몇 건씩 수집됐는지 보여줍니다.</div>', unsafe_allow_html=True)
+    ranked = sorted(counts.items(), key=lambda kv: -kv[1])
+    # "전체"를 별도의 큰 타일로 떼어놓지 않고 같은 그리드의 첫 칸으로 넣어서, 위아래로
+    # 타일 크기가 안 맞아 보이는 문제 없이 전부 같은 크기로 나오게 한다.
+    metrics = [{"icon": "🗞️", "value": f"{total_count:,}", "label": "전체"}] + [
+        {"icon": "📡", "value": f"{n:,}", "label": ch} for ch, n in ranked
+    ]
+    # 이 화면의 지표 타일은 좁은 오른쪽 패널(전체 폭의 약 70%) 안에 들어가므로, 채널이
+    # 많을 때(5~6개) 한 줄에 다 넣으면 타일이 밀려 좁아진다 — 한 줄에 최대 3개로 줄바꿈.
+    # theme.metric_row(chunk)를 그대로 쓰면 마지막 줄(예: 3,3,1일 때 1개)의 컬럼 폭이
+    # st.columns(len(chunk))로 매번 다시 계산돼 앞줄의 3등분 타일보다 넓어져 크기가 안
+    # 맞아 보인다 — 항상 고정으로 3칸을 만들고 남는 칸은 비워둬서 모든 타일 크기를
+    # 동일하게 유지한다.
+    row_size = 3
+    for i in range(0, len(metrics), row_size):
+        row = metrics[i:i + row_size]
+        cols = st.columns(row_size)
+        for col, m in zip(cols, row):
+            col.markdown(f"""
+            <div class="metric-box"><span class="mi">{m['icon']}</span>
+            <div class="v">{m['value']}</div><div class="l">{m['label']}</div></div>
+            """, unsafe_allow_html=True)
+
+
+def _render_channel_top_news(channel_top_news: dict) -> None:
+    st.markdown('<h2 class="sec">채널별 주요 뉴스</h2>', unsafe_allow_html=True)
+    st.markdown('<div class="sec-note">채널별로 가장 점수가 높은 기사를 모았습니다.</div>', unsafe_allow_html=True)
+    if not channel_top_news:
+        st.caption("수집된 데이터 없음")
+        return
+    channels = list(channel_top_news.keys())
+    tabs = st.tabs(channels)
+    for ch, tab in zip(channels, tabs):
+        with tab:
+            items = channel_top_news[ch]
+            if not items:
+                st.caption("해당 소식 없음")
+                continue
+            for i, it in enumerate(items):
+                st.markdown(_archive_card_html(it, _rank(i)), unsafe_allow_html=True)
 
 
 def _render_sections(date_str: str, content: dict) -> None:
-    st.markdown(f"### {date_str}")
-    st.caption(f"총 {content['total_count']:,}건 수집")
-
-    st.markdown("#### 📡 채널별 수집 현황")
-    counts = sorted(content["channel_counts"].items(), key=lambda kv: -kv[1])
-    if counts:
-        counts_df = pd.DataFrame([{"채널": ch, "건수": n} for ch, n in counts])
-        st.dataframe(counts_df, use_container_width=True, hide_index=True)
-    else:
-        st.caption("수집된 데이터 없음")
-
-    st.markdown("#### 📰 채널별 주요 뉴스")
-    for ch, items in content["channel_top_news"].items():
-        with st.expander(f"{ch} ({len(items)}건)"):
-            for it in items:
-                st.markdown(f"- [{it['title']}]({it['url']}) · {it['brand']} · {it['posted_at']}")
-
-    _render_news_list("🏠 프롭티어 관련 뉴스", content["own_brand_news"])
-    _render_news_list("⚔️ 경쟁사 동향", content["competitor_news"])
-    _render_news_list("🌐 시장 동향", content["market_news"])
+    _render_channel_counts(date_str, content["total_count"], content["channel_counts"])
+    _render_channel_top_news(content["channel_top_news"])
+    _render_news_list("🏠 프롭티어 관련 뉴스", "자사 관련 소식만 모았습니다.", content["own_brand_news"])
+    _render_news_list("⚔️ 경쟁사 동향", "경쟁사 관련 소식만 모았습니다.", content["competitor_news"])
+    _render_news_list("🌐 시장 동향", "AI·프롭테크 등 시장 전반의 소식입니다.", content["market_news"])
 
 
 def render():
