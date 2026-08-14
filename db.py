@@ -251,6 +251,58 @@ def count_mentions_by_brand_since(brand: str, days: int) -> int:
         ).fetchone()[0]
 
 
+def get_top_mentioned_brands(days: int = 30, limit: int = 5) -> list[dict]:
+    """최근 days일간 언급 건수 내림차순으로 브랜드 상위 limit개를 반환한다."""
+    init_db()
+    with _connect() as con:
+        rows = con.execute(
+            "SELECT brand, COUNT(*) AS cnt FROM mentions "
+            "WHERE collected_at >= datetime('now', ?) "
+            "GROUP BY brand ORDER BY cnt DESC LIMIT ?",
+            [f"-{days} days", limit],
+        ).fetchall()
+        return [{"brand": r[0], "count": r[1]} for r in rows]
+
+
+def get_mentions_since(days: int, limit: int = 5000) -> list[dict]:
+    """최근 days일간 수집된 mentions 전체(채널·노출설정 무관)를 반환한다 — 카테고리
+    집계처럼 화면 노출과 무관하게 전체 데이터를 봐야 하는 통계용 함수에 쓴다."""
+    init_db()
+    with _connect() as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT * FROM mentions WHERE collected_at >= datetime('now', ?) "
+            "ORDER BY collected_at DESC LIMIT ?",
+            [f"-{days} days", limit],
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_policy_events_since(days: int, limit: int = 5000) -> list[dict]:
+    """최근 days일간 수집된 policy_events 전체를 반환한다."""
+    init_db()
+    with _connect() as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT * FROM policy_events WHERE collected_at >= datetime('now', ?) "
+            "ORDER BY collected_at DESC LIMIT ?",
+            [f"-{days} days", limit],
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def count_mentions_between(start_days_ago: int, end_days_ago: int) -> int:
+    """collected_at이 (now - start_days_ago일) 이상 (now - end_days_ago일) 미만인 건수.
+    예: start=7,end=0 → 최근 7일. start=14,end=7 → 그 이전 7일(예: "지난주")."""
+    init_db()
+    with _connect() as con:
+        return con.execute(
+            "SELECT COUNT(*) FROM mentions WHERE collected_at >= datetime('now', ?) "
+            "AND collected_at < datetime('now', ?)",
+            [f"-{start_days_ago} days", f"-{end_days_ago} days"],
+        ).fetchone()[0]
+
+
 def get_mentions(
     brand: str = "", channel: str = "", channels: list | None = None, limit: int = 3000
 ) -> list[dict]:

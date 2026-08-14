@@ -44,6 +44,56 @@ def test_count_mentions_by_brand_since_excludes_older_than_window(tmp_path, monk
     assert db.count_mentions_by_brand_since("직방", days=60) == 2
 
 
+def test_get_top_mentioned_brands_returns_descending_by_count(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1", brand="직방"))
+    db.insert_mention(_mention(url="https://x/2", brand="직방"))
+    db.insert_mention(_mention(url="https://x/3", brand="직방"))
+    db.insert_mention(_mention(url="https://x/4", brand="다방"))
+    db.insert_mention(_mention(url="https://x/5", brand="다방"))
+    db.insert_mention(_mention(url="https://x/6", brand="부동산114"))
+
+    top = db.get_top_mentioned_brands(days=30, limit=2)
+
+    assert top == [{"brand": "직방", "count": 3}, {"brand": "다방", "count": 2}]
+
+
+def test_get_mentions_since_excludes_older_than_window(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    recent = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    old = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%d %H:%M:%S")
+    db.insert_mention({**_mention(url="https://x/1"), "collected_at": recent})
+    db.insert_mention({**_mention(url="https://x/2"), "collected_at": old})
+
+    results = db.get_mentions_since(days=30)
+
+    assert [r["url"] for r in results] == ["https://x/1"]
+
+
+def test_get_policy_events_since_excludes_older_than_window(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    recent = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    old = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%d %H:%M:%S")
+    db.insert_policy_event({**_policy_event(url="https://p/1"), "collected_at": recent})
+    db.insert_policy_event({**_policy_event(url="https://p/2"), "collected_at": old})
+
+    results = db.get_policy_events_since(days=30)
+
+    assert [r["url"] for r in results] == ["https://p/1"]
+
+
+def test_count_mentions_between_selects_correct_window(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    this_week = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S")
+    last_week = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S")
+    db.insert_mention({**_mention(url="https://x/1"), "collected_at": this_week})
+    db.insert_mention({**_mention(url="https://x/2"), "collected_at": last_week})
+
+    assert db.count_mentions_between(7, 0) == 1
+    assert db.count_mentions_between(14, 7) == 1
+    assert db.count_mentions_between(14, 0) == 2
+
+
 def test_get_mentions_channels_filter_matches_any_of_the_given_channels(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     db.insert_mention(_mention(url="https://x/1", channel="네이버"))

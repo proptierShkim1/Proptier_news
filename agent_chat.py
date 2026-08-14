@@ -21,6 +21,7 @@ from google.genai import types
 
 import db
 import news_feed
+import policy_feed
 import summarizer
 
 _BASE_SYSTEM_INSTRUCTION = (
@@ -259,9 +260,87 @@ def get_vectorization_status() -> dict:
     }
 
 
+def get_top_mentioned_brands(days: int = 30, limit: int = 5) -> list[dict]:
+    """최근 N일간 가장 많이 언급된 브랜드 순위를 알려준다 — 브랜드 이름을 몰라도 "요즘
+    누가 제일 핫해?" 같은 질문에 답할 수 있다.
+
+    Args:
+        days: 최근 며칠간을 볼지 (기본 30일).
+        limit: 몇 개까지 보여줄지 (기본 5개).
+
+    Returns:
+        [{"brand": str, "count": int}, ...] 언급 건수 내림차순.
+    """
+    return db.get_top_mentioned_brands(days=days, limit=limit)
+
+
+def get_news_category_counts(days: int = 30) -> dict:
+    """최근 N일간 수집된 뉴스가 카테고리별(신규 도입/AI/부동산AI/매물/시세·감정/정책/해외/
+    리포트)로 몇 건씩 해당하는지 알려준다. 한 기사가 여러 카테고리에 동시에 해당할 수
+    있어 합계가 전체 건수보다 클 수 있다.
+
+    Args:
+        days: 최근 며칠간을 볼지 (기본 30일).
+
+    Returns:
+        카테고리명을 키로, 해당 건수를 값으로 갖는 딕셔너리.
+    """
+    mentions = db.get_mentions_since(days)
+    counts: dict[str, int] = {}
+    for m in mentions:
+        text = f"{m.get('title', '')} {m.get('snippet', '')}"
+        for cat in news_feed.categorize(text):
+            counts[cat] = counts.get(cat, 0) + 1
+    return counts
+
+
+def get_policy_category_counts(days: int = 30) -> dict:
+    """최근 N일간 수집된 정부 정책 보도자료가 카테고리별(규제·법령/지원·사업/통계·조사/
+    조직·인사/행사·홍보)로 몇 건씩 해당하는지 알려준다.
+
+    Args:
+        days: 최근 며칠간을 볼지 (기본 30일).
+
+    Returns:
+        카테고리명을 키로, 해당 건수를 값으로 갖는 딕셔너리.
+    """
+    events = db.get_policy_events_since(days)
+    counts: dict[str, int] = {}
+    for e in events:
+        for cat in policy_feed.categorize(e.get("title", "")):
+            counts[cat] = counts.get(cat, 0) + 1
+    return counts
+
+
+def compare_collection_periods(period_days: int = 7) -> dict:
+    """최근 period_days일과 그 직전 period_days일의 전체 뉴스 수집 건수를 비교한다 —
+    "이번주랑 지난주 비교해줘" 같은 질문에 쓴다.
+
+    Args:
+        period_days: 한 구간의 길이(일). 기본 7일(주간 비교).
+
+    Returns:
+        {"recent_period": {"days": int, "count": int}, "previous_period": {"days": int,
+        "count": int}, "change": int, "change_pct": float | None} — change_pct는 직전
+        구간이 0건이면 계산 불가능하므로 None.
+    """
+    recent = db.count_mentions_between(period_days, 0)
+    previous = db.count_mentions_between(period_days * 2, period_days)
+    change = recent - previous
+    change_pct = round((change / previous) * 100, 1) if previous else None
+    return {
+        "recent_period": {"days": period_days, "count": recent},
+        "previous_period": {"days": period_days, "count": previous},
+        "change": change,
+        "change_pct": change_pct,
+    }
+
+
 _STATS_TOOLS = [
     get_channel_counts, get_overview_stats, get_brand_mention_count, get_policy_source_counts,
     get_briefing_highlights, get_collection_health, compare_brand_mentions, get_vectorization_status,
+    get_top_mentioned_brands, get_news_category_counts, get_policy_category_counts,
+    compare_collection_periods,
 ]
 
 

@@ -430,3 +430,58 @@ def test_get_vectorization_status_aggregates_counts(monkeypatch):
         "mentions_total": 100, "mentions_pending": 10,
         "policy_events_total": 50, "policy_events_pending": 2,
     }
+
+
+def test_get_top_mentioned_brands_delegates_to_db(monkeypatch):
+    ranked = [{"brand": "직방", "count": 10}, {"brand": "다방", "count": 3}]
+    monkeypatch.setattr(agent_chat.db, "get_top_mentioned_brands", lambda days, limit: ranked)
+
+    assert agent_chat.get_top_mentioned_brands(days=30, limit=5) == ranked
+
+
+def test_get_news_category_counts_aggregates_across_mentions(monkeypatch):
+    mentions = [
+        {"title": "직방 AI 매물 추천 출시", "snippet": ""},
+        {"title": "다방 신규 서비스 출시", "snippet": "AI 기반"},
+    ]
+    monkeypatch.setattr(agent_chat.db, "get_mentions_since", lambda days: mentions)
+
+    counts = agent_chat.get_news_category_counts(days=30)
+
+    assert counts["신규 도입"] == 2
+    assert counts["AI"] == 2
+
+
+def test_get_policy_category_counts_aggregates_across_events(monkeypatch):
+    events = [
+        {"title": "임대주택 지원 사업 공고"},
+        {"title": "주택 통계 조사 결과 발표"},
+    ]
+    monkeypatch.setattr(agent_chat.db, "get_policy_events_since", lambda days: events)
+
+    counts = agent_chat.get_policy_category_counts(days=30)
+
+    assert counts["지원·사업"] == 1
+    assert counts["통계·조사"] == 1
+
+
+def test_compare_collection_periods_computes_change_and_percentage(monkeypatch):
+    def fake_between(start, end):
+        return {(7, 0): 30, (14, 7): 20}[(start, end)]
+
+    monkeypatch.setattr(agent_chat.db, "count_mentions_between", fake_between)
+
+    result = agent_chat.compare_collection_periods(period_days=7)
+
+    assert result["recent_period"] == {"days": 7, "count": 30}
+    assert result["previous_period"] == {"days": 7, "count": 20}
+    assert result["change"] == 10
+    assert result["change_pct"] == 50.0
+
+
+def test_compare_collection_periods_handles_zero_previous_period(monkeypatch):
+    monkeypatch.setattr(agent_chat.db, "count_mentions_between", lambda start, end: 0)
+
+    result = agent_chat.compare_collection_periods(period_days=7)
+
+    assert result["change_pct"] is None
