@@ -257,21 +257,36 @@ def footer(note):
 
 def floating_actions(agent_page):
     """모든 화면 공통으로 우하단에 떠 있는 "맨 위로"/"AI AGENT로 이동" 버튼. app.py가
-    nav.run() 직후 한 번만 호출한다 — position:fixed라 호출 위치는 화면상 위치에 영향을
-    주지 않지만, 모든 페이지에서 매번 렌더링되어야 하므로 라우팅 이후 공통 코드에 둔다.
-    맨 위로 버튼은 순수 HTML/JS 스크롤이라 페이지 새로고침이 없고, AI AGENT 버튼은
-    st.switch_page로 이동해 세션 상태를 유지한 채(대화 이력 등) 전환된다."""
+    st.navigation(...).run() **이전에** 호출해야 한다 — run() 뒤에 오는 코드는 실제로
+    렌더링되지 않는다는 걸 실측으로 확인함(position:fixed라 화면상 위치는 호출 순서와
+    무관하지만, 애초에 실행조차 안 되면 소용없다).
+
+    맨 위로 버튼은 onclick 인라인 JS가 아니라 순수 앵커(#fragment) 링크다 — Streamlit이
+    unsafe_allow_html로 넣은 HTML을 React가 파싱하면서 onclick 같은 인라인 이벤트
+    속성을 통째로 제거해버리는 걸 실측으로 확인함(콘솔에 "Minified React error #231
+    ... args[]=onClick&args[]=string" 발생, 렌더링된 DOM에 onclick 속성 자체가 사라져
+    있었음). 그래서 이 함수가 호출되는 시점(run() 이전 = 페이지 콘텐츠보다 먼저
+    렌더링됨)에 스크롤 최상단 지점에 보이지 않는 마커(#hp-scroll-top)를 심어두고,
+    버튼은 그 마커로 가는 순수 `<a href="#...">` 링크로만 구현한다 — 브라우저 기본
+    앵커 스크롤 동작이라 JS 없이도 동작하고, 실제 스크롤 컨테이너가 document가 아니라
+    [data-testid="stMain"]이어도 문제없이 그 안에서 스크롤된다.
+
+    AI AGENT 버튼은 st.switch_page로 이동해 세션 상태를 유지한 채(대화 이력 등)
+    전환된다."""
     st.markdown("""
     <style>
+    [data-testid="stMain"] { scroll-behavior: smooth; }
+
     #hp-top-fab {
       position: fixed; right: 24px; bottom: 92px; z-index: 9999;
       width: 50px; height: 50px; border-radius: 50%;
-      background: var(--hana-dark); color: #fff; text-decoration: none;
+      background: #fff; color: var(--hana-deep); text-decoration: none;
+      border: 2px solid var(--hana);
       display: flex; align-items: center; justify-content: center;
       font-size: 1.2rem; box-shadow: var(--shadow-md);
-      transition: transform .15s ease;
+      transition: transform .15s ease, background .15s ease;
     }
-    #hp-top-fab:hover { transform: translateY(-2px); color: #fff; }
+    #hp-top-fab:hover { transform: translateY(-2px); color: #fff; background: var(--hana); }
 
     div[class*="st-key-hp_agent_fab"] {
       position: fixed; right: 24px; bottom: 24px; z-index: 9999;
@@ -287,8 +302,8 @@ def floating_actions(agent_page):
       background: var(--hana-deep); color: #fff; transform: translateY(-2px);
     }
     </style>
-    <a id="hp-top-fab" href="#" title="맨 위로"
-       onclick="window.scrollTo({top:0,behavior:'smooth'}); return false;">\U00002B06\U0000FE0F</a>
+    <span id="hp-scroll-top"></span>
+    <a id="hp-top-fab" href="#hp-scroll-top" title="맨 위로">\U00002B06\U0000FE0F</a>
     """, unsafe_allow_html=True)
 
     if st.button("\U0001F916", key="hp_agent_fab", help="AI AGENT로 이동"):
