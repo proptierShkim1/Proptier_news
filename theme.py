@@ -253,3 +253,43 @@ def policy_signal_card(item, rank_display, top_class=""):
 
 def footer(note):
     st.markdown(f'<div class="footer">프롭티어 · 부동산 AI 주요뉴스 봇 &nbsp;|&nbsp; {note}</div>', unsafe_allow_html=True)
+
+
+def floating_actions(agent_page):
+    """모든 화면 공통으로 우하단에 떠 있는 "맨 위로"/"AI AGENT로 이동" 버튼. app.py가
+    nav.run() 직후 한 번만 호출한다 — position:fixed라 호출 위치는 화면상 위치에 영향을
+    주지 않지만, 모든 페이지에서 매번 렌더링되어야 하므로 라우팅 이후 공통 코드에 둔다.
+    맨 위로 버튼은 순수 HTML/JS 스크롤이라 페이지 새로고침이 없고, AI AGENT 버튼은
+    st.switch_page로 이동해 세션 상태를 유지한 채(대화 이력 등) 전환된다."""
+    st.markdown("""
+    <style>
+    #hp-top-fab {
+      position: fixed; right: 24px; bottom: 92px; z-index: 9999;
+      width: 50px; height: 50px; border-radius: 50%;
+      background: var(--hana-dark); color: #fff; text-decoration: none;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.2rem; box-shadow: var(--shadow-md);
+      transition: transform .15s ease;
+    }
+    #hp-top-fab:hover { transform: translateY(-2px); color: #fff; }
+
+    div[class*="st-key-hp_agent_fab"] {
+      position: fixed; right: 24px; bottom: 24px; z-index: 9999;
+      width: 50px; height: 50px;
+    }
+    div[class*="st-key-hp_agent_fab"] button {
+      width: 50px; height: 50px; border-radius: 50%; padding: 0;
+      background: var(--hana); color: #fff; border: none;
+      font-size: 1.2rem; box-shadow: var(--shadow-md);
+      transition: transform .15s ease;
+    }
+    div[class*="st-key-hp_agent_fab"] button:hover {
+      background: var(--hana-deep); color: #fff; transform: translateY(-2px);
+    }
+    </style>
+    <a id="hp-top-fab" href="#" title="맨 위로"
+       onclick="window.scrollTo({top:0,behavior:'smooth'}); return false;">\U00002B06\U0000FE0F</a>
+    """, unsafe_allow_html=True)
+
+    if st.button("\U0001F916", key="hp_agent_fab", help="AI AGENT로 이동"):
+        st.switch_page(agent_page)
