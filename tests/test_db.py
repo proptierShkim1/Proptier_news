@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 import db
 
 
@@ -610,3 +612,47 @@ def test_get_distinct_mention_dates_returns_unique_dates_only(tmp_path, monkeypa
     db.insert_mention({**_mention(url="https://x/4"), "collected_at": "2026-08-07 09:00:00"})
 
     assert db.get_distinct_mention_dates() == {"2026-08-05", "2026-08-06", "2026-08-07"}
+
+
+def test_insert_api_usage_then_get_summary_aggregates_by_feature(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_api_usage(
+        "summarizer", "gemini-2.5-flash", ok=True,
+        prompt_tokens=10, output_tokens=5, thoughts_tokens=20, total_tokens=35,
+    )
+    db.insert_api_usage(
+        "summarizer", "gemini-2.5-flash", ok=True,
+        prompt_tokens=8, output_tokens=2, thoughts_tokens=5, total_tokens=15,
+    )
+    db.insert_api_usage("agent_chat", "gemini-2.5-flash", ok=False)
+
+    summary = db.get_api_usage_summary(days=30)
+
+    assert summary["summarizer"] == {
+        "calls": 2, "prompt_tokens": 18, "output_tokens": 32, "tokens": 50, "failed": 0,
+    }
+    assert summary["agent_chat"] == {
+        "calls": 1, "prompt_tokens": 0, "output_tokens": 0, "tokens": 0, "failed": 1,
+    }
+
+
+def test_get_api_usage_summary_excludes_entries_older_than_window(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_api_usage("summarizer", "gemini-2.5-flash", total_tokens=10)
+    old_ts = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%d %H:%M:%S")
+    with db._connect() as con:
+        con.execute("UPDATE api_usage_log SET ts = ? WHERE feature = 'summarizer'", [old_ts])
+
+    assert db.get_api_usage_summary(days=30) == {}
+
+
+def test_get_api_usage_daily_groups_by_date(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_api_usage("summarizer", "gemini-2.5-flash", total_tokens=10)
+    db.insert_api_usage("summarizer", "gemini-2.5-flash", total_tokens=20)
+
+    daily = db.get_api_usage_daily(days=30)
+
+    assert len(daily) == 1
+    assert daily[0]["calls"] == 2
+    assert daily[0]["tokens"] == 30

@@ -21,11 +21,14 @@ def test_summarize_article_returns_gemini_response_text(monkeypatch):
     fake_client = MagicMock()
     fake_client.models.generate_content.return_value = fake_response
 
-    with patch.object(summarizer.genai, "Client", return_value=fake_client) as mock_ctor:
+    with patch.object(summarizer.genai, "Client", return_value=fake_client) as mock_ctor, \
+         patch("db.insert_api_usage") as mock_usage:
         result = summarizer.summarize_article("제목", "본문 내용")
 
     assert result == "요약된 내용입니다."
     mock_ctor.assert_called_once_with(api_key="key1")
+    mock_usage.assert_called_once()
+    assert mock_usage.call_args.kwargs["ok"] is True
 
 
 def test_summarize_article_tries_next_key_on_failure(monkeypatch):
@@ -36,10 +39,14 @@ def test_summarize_article_tries_next_key_on_failure(monkeypatch):
     working_client = MagicMock()
     working_client.models.generate_content.return_value = fake_response
 
-    with patch.object(summarizer.genai, "Client", side_effect=[failing_client, working_client]):
+    with patch.object(summarizer.genai, "Client", side_effect=[failing_client, working_client]), \
+         patch("db.insert_api_usage") as mock_usage:
         result = summarizer.summarize_article("제목", "본문 내용")
 
     assert result == "복구된 요약"
+    assert mock_usage.call_count == 2
+    assert mock_usage.call_args_list[0].kwargs["ok"] is False
+    assert mock_usage.call_args_list[1].kwargs["ok"] is True
 
 
 def test_summarize_article_returns_empty_string_when_all_keys_fail(monkeypatch):
@@ -47,10 +54,13 @@ def test_summarize_article_returns_empty_string_when_all_keys_fail(monkeypatch):
     failing_client = MagicMock()
     failing_client.models.generate_content.side_effect = Exception("boom")
 
-    with patch.object(summarizer.genai, "Client", return_value=failing_client):
+    with patch.object(summarizer.genai, "Client", return_value=failing_client), \
+         patch("db.insert_api_usage") as mock_usage:
         result = summarizer.summarize_article("제목", "본문 내용")
 
     assert result == ""
+    mock_usage.assert_called_once()
+    assert mock_usage.call_args.kwargs["ok"] is False
 
 
 def _item(title="제목", content="", summary="", mention_id=1):

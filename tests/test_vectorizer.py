@@ -1,6 +1,15 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import vectorizer
+
+
+@pytest.fixture(autouse=True)
+def _stub_api_usage_logging(monkeypatch):
+    """embed_text가 이제 매 호출마다 db.insert_api_usage를 남긴다 — 로깅 자체를 검증하는
+    테스트를 빼고는 기본적으로 no-op 처리해 진짜 DB를 건드리지 않게 한다."""
+    monkeypatch.setattr(vectorizer.db, "insert_api_usage", lambda *a, **kw: None)
 
 
 def test_has_api_keys_false_when_none_configured(monkeypatch):
@@ -65,6 +74,32 @@ def test_embed_text_returns_none_when_all_keys_fail(monkeypatch):
         result = vectorizer.embed_text("텍스트")
 
     assert result is None
+
+
+def test_embed_text_logs_api_usage_on_success(monkeypatch):
+    monkeypatch.setattr(vectorizer, "_load_api_keys", lambda: ["key1"])
+    fake_embedding = MagicMock(values=[0.1, 0.2, 0.3])
+    fake_response = MagicMock(embeddings=[fake_embedding])
+    fake_client = MagicMock()
+    fake_client.models.embed_content.return_value = fake_response
+
+    with patch.object(vectorizer.genai, "Client", return_value=fake_client), \
+         patch.object(vectorizer.db, "insert_api_usage") as mock_usage:
+        vectorizer.embed_text("텍스트")
+
+    mock_usage.assert_called_once_with("vectorizer", vectorizer._EMBEDDING_MODEL, ok=True)
+
+
+def test_embed_text_logs_api_usage_as_failed_when_all_keys_fail(monkeypatch):
+    monkeypatch.setattr(vectorizer, "_load_api_keys", lambda: ["key1"])
+    failing_client = MagicMock()
+    failing_client.models.embed_content.side_effect = Exception("boom")
+
+    with patch.object(vectorizer.genai, "Client", return_value=failing_client), \
+         patch.object(vectorizer.db, "insert_api_usage") as mock_usage:
+        vectorizer.embed_text("텍스트")
+
+    mock_usage.assert_called_once_with("vectorizer", vectorizer._EMBEDDING_MODEL, ok=False)
 
 
 def test_vectorize_pending_embeds_mentions_and_policy_events_separately():

@@ -1,7 +1,18 @@
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import agent_chat
+
+
+@pytest.fixture(autouse=True)
+def _stub_api_usage_logging(monkeypatch):
+    """이 파일의 거의 모든 테스트가 _send_with_key_failover를 거치고, 거기서 이제
+    db.insert_api_usage를 호출한다. MagicMock 응답의 usage_metadata는 실제 int가 아니라
+    MagicMock이라 그대로 두면 진짜 DB에 잘못된 값을 쓰려 든다 — 사용량 로깅 자체를
+    검증하는 테스트를 빼고는 기본적으로 no-op 처리한다."""
+    monkeypatch.setattr(agent_chat.db, "insert_api_usage", lambda *a, **kw: None)
 
 
 def test_has_api_keys_reflects_configured_keys(monkeypatch):
@@ -299,3 +310,37 @@ def test_ask_passes_stats_tools_and_todays_date_in_system_instruction(monkeypatc
     config = fake_client.chats.create.call_args.kwargs["config"]
     assert config["tools"] == agent_chat._STATS_TOOLS
     assert "2026-08-13" in config["system_instruction"]
+
+
+def test_ask_logs_api_usage_with_token_counts_on_success(monkeypatch):
+    monkeypatch.setattr(agent_chat.summarizer, "_load_api_keys", lambda: ["key1"])
+    monkeypatch.setattr(agent_chat.db, "insert_api_usage", lambda *a, **kw: None)
+    usage = MagicMock(
+        prompt_token_count=10, candidates_token_count=5,
+        thoughts_token_count=20, total_token_count=35,
+    )
+    fake_chat = MagicMock()
+    fake_chat.send_message.return_value = MagicMock(text="응답", usage_metadata=usage)
+    fake_client = MagicMock()
+    fake_client.chats.create.return_value = fake_chat
+
+    with patch.object(agent_chat.genai, "Client", return_value=fake_client), \
+         patch.object(agent_chat.db, "insert_api_usage") as mock_usage:
+        agent_chat.ask([], "안녕")
+
+    mock_usage.assert_called_once_with(
+        "agent_chat", agent_chat.summarizer._model_name(), ok=True,
+        prompt_tokens=10, output_tokens=5, thoughts_tokens=20, total_tokens=35,
+    )
+
+
+def test_ask_logs_api_usage_as_failed_when_all_keys_fail(monkeypatch):
+    monkeypatch.setattr(agent_chat.summarizer, "_load_api_keys", lambda: ["key1"])
+    failing_client = MagicMock()
+    failing_client.chats.create.side_effect = Exception("boom")
+
+    with patch.object(agent_chat.genai, "Client", return_value=failing_client), \
+         patch.object(agent_chat.db, "insert_api_usage") as mock_usage:
+        agent_chat.ask([], "안녕")
+
+    mock_usage.assert_called_once_with("agent_chat", agent_chat.summarizer._model_name(), ok=False)

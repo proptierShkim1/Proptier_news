@@ -40,7 +40,8 @@ def has_api_keys() -> bool:
 
 def embed_text(text: str) -> list[float] | None:
     """text를 Gemini로 임베딩해 실수 리스트로 반환한다. 키가 없거나 텍스트가 비었거나
-    모든 키 호출이 실패하면 None을 반환한다."""
+    모든 키 호출이 실패하면 None을 반환한다. 임베딩 API 응답은 토큰 사용량을 안 주므로
+    (usage_metadata 없음), 호출 성공/실패 건수만 api_usage_log에 남긴다."""
     text = (text or "").strip()
     keys = _load_api_keys()
     if not keys or not text:
@@ -49,8 +50,10 @@ def embed_text(text: str) -> list[float] | None:
         try:
             client = genai.Client(api_key=key)
             response = client.models.embed_content(model=_EMBEDDING_MODEL, contents=text)
+            db.insert_api_usage("vectorizer", _EMBEDDING_MODEL, ok=True)
             return list(response.embeddings[0].values)
         except Exception:
+            db.insert_api_usage("vectorizer", _EMBEDDING_MODEL, ok=False)
             continue
     return None
 

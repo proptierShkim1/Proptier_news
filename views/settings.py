@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 import cached_db
 import collector
 import db
+import theme
 import vectorizer
 from access_control import load_config, save_config, name_for_ip
 from utils import (
@@ -1302,12 +1303,78 @@ def _render_activity_log_tab():
     _render_pagination_controls("activity_log", page, total_pages)
 
 
+# ── API 사용량 ────────────────────────────────────────────────────────────
+
+_API_USAGE_FEATURE_LABELS = {
+    "summarizer": "📄 기사 요약(PDF)",
+    "agent_chat": "🤖 AI AGENT 대화",
+    "vectorizer": "🧬 벡터화(임베딩)",
+}
+# Gemini 2.5 Flash 공개 요금(2026-08 기준, USD/100만 토큰) 추정치 — 실제 청구 금액과
+# 다를 수 있다. 요금이 바뀌면 이 두 값만 갱신하면 된다.
+_PRICE_PER_1M_INPUT_USD = 0.30
+_PRICE_PER_1M_OUTPUT_USD = 2.50
+
+
+def _estimate_cost_usd(prompt_tokens: int, output_tokens: int) -> float:
+    return (
+        (prompt_tokens / 1_000_000) * _PRICE_PER_1M_INPUT_USD
+        + (output_tokens / 1_000_000) * _PRICE_PER_1M_OUTPUT_USD
+    )
+
+
+def _render_api_usage_tab():
+    st.caption(
+        "Gemini API 호출량과 추정 비용입니다. 실패한 호출도 건수에는 포함되지만 토큰은 "
+        "0으로 기록됩니다. 비용은 공개 요금 기준 추정치이며 실제 청구 금액과 다를 수 있습니다."
+    )
+    days = st.selectbox("조회 기간(일)", [7, 30, 90], index=1, key="api_usage_days")
+
+    summary = db.get_api_usage_summary(days=days)
+    total_calls = sum(v["calls"] for v in summary.values())
+    total_failed = sum(v["failed"] for v in summary.values())
+    total_prompt = sum(v["prompt_tokens"] for v in summary.values())
+    total_output = sum(v["output_tokens"] for v in summary.values())
+    total_cost = _estimate_cost_usd(total_prompt, total_output)
+
+    theme.metric_row([
+        {"icon": "📞", "value": f"{total_calls:,}", "label": f"최근 {days}일 호출"},
+        {"icon": "❌", "value": f"{total_failed:,}", "label": "실패 건수"},
+        {"icon": "🔢", "value": f"{(total_prompt + total_output):,}", "label": "총 토큰"},
+        {"icon": "💵", "value": f"${total_cost:,.2f}", "label": "추정 비용(USD)"},
+    ])
+
+    if not summary:
+        st.caption("아직 기록된 API 호출이 없습니다.")
+        return
+
+    st.divider()
+    st.subheader("기능별 사용량")
+    rows = []
+    for feature, v in summary.items():
+        cost = _estimate_cost_usd(v["prompt_tokens"], v["output_tokens"])
+        rows.append({
+            "기능": _API_USAGE_FEATURE_LABELS.get(feature, feature),
+            "호출 수": v["calls"], "실패": v["failed"],
+            "입력 토큰": v["prompt_tokens"], "출력 토큰": v["output_tokens"],
+            "추정 비용(USD)": round(cost, 4),
+        })
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    daily = db.get_api_usage_daily(days=days)
+    if daily:
+        st.divider()
+        st.subheader("📈 일자별 호출 추이")
+        theme.bar_chart({d["date"]: d["calls"] for d in daily}, height=200)
+
+
 # ── 메인 진입점 ────────────────────────────────────────────────────────────
 
 def render():
     st.title("⚙️ 설정")
     _render_lazy_tabs(
-        ["🔐 접근 제어", "🔄 데이터 수집", "🗃 데이터 관리", "🧬 벡터 데이터", "📋 로그", "🚀 배포"], "main_tab",
+        ["🔐 접근 제어", "🔄 데이터 수집", "🗃 데이터 관리", "🧬 벡터 데이터", "💳 API 사용량", "📋 로그", "🚀 배포"],
+        "main_tab",
         [_render_access_control, _render_data_collection, _render_data_management,
-         _render_vector_data_tab, _render_activity_log_tab, _render_deploy],
+         _render_vector_data_tab, _render_api_usage_tab, _render_activity_log_tab, _render_deploy],
     )

@@ -113,6 +113,20 @@ CREATE TABLE IF NOT EXISTS activity_log (
 );
 """
 
+_API_USAGE_LOG_SQL = """
+CREATE TABLE IF NOT EXISTS api_usage_log (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts              TEXT NOT NULL,
+    feature         TEXT NOT NULL,
+    model           TEXT NOT NULL,
+    ok              INTEGER NOT NULL DEFAULT 1,
+    prompt_tokens   INTEGER NOT NULL DEFAULT 0,
+    output_tokens   INTEGER NOT NULL DEFAULT 0,
+    thoughts_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens    INTEGER NOT NULL DEFAULT 0
+);
+"""
+
 _BRIEFING_ARCHIVES_SQL = """
 CREATE TABLE IF NOT EXISTS briefing_archives (
     date              TEXT PRIMARY KEY,
@@ -159,6 +173,7 @@ def init_db() -> None:
         con.execute(_POLICY_RUN_LOGS_SQL)
         con.execute(_VECTOR_RUN_LOGS_SQL)
         con.execute(_ACTIVITY_LOG_SQL)
+        con.execute(_API_USAGE_LOG_SQL)
         con.execute(_BRIEFING_ARCHIVES_SQL)
         con.execute(_mention_vectors_sql())
         con.execute(_policy_vectors_sql())
@@ -578,6 +593,68 @@ def distinct_activity_ips() -> list[str]:
     init_db()
     with _connect() as con:
         return [row[0] for row in con.execute("SELECT DISTINCT ip FROM activity_log ORDER BY ip")]
+
+
+def insert_api_usage(
+    feature: str, model: str, ok: bool = True,
+    prompt_tokens: int = 0, output_tokens: int = 0, thoughts_tokens: int = 0, total_tokens: int = 0,
+) -> None:
+    """Gemini 호출 1건을 기록한다. summarizer(기사 요약)/agent_chat(AI AGENT 대화)/
+    vectorizer(임베딩) 세 기능이 각자 호출 직후 남긴다 — 설정 > API 사용량 탭에서
+    호출량·토큰·추정 비용을 보여주는 데 쓴다."""
+    init_db()
+    with _connect() as con:
+        con.execute(
+            "INSERT INTO api_usage_log "
+            "(ts, feature, model, ok, prompt_tokens, output_tokens, thoughts_tokens, total_tokens) "
+            "VALUES (:ts, :feature, :model, :ok, :prompt_tokens, :output_tokens, :thoughts_tokens, :total_tokens)",
+            {
+                "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "feature": feature, "model": model, "ok": int(ok),
+                "prompt_tokens": prompt_tokens, "output_tokens": output_tokens,
+                "thoughts_tokens": thoughts_tokens, "total_tokens": total_tokens,
+            },
+        )
+
+
+def get_api_usage_summary(days: int = 30) -> dict:
+    """최근 days일간 기능별 호출 수·토큰 합계(입력/출력 구분 포함)와 실패 건수를 반환한다.
+    {"summarizer": {"calls": n, "prompt_tokens": n, "output_tokens": n, "tokens": n,
+    "failed": n}, ...} 형태 — 기능명은 feature 컬럼값 그대로(summarizer/agent_chat/
+    vectorizer). output_tokens에는 thoughts_tokens(사고 과정 토큰, gemini-2.5 계열은
+    이것도 과금 대상)를 합쳐서 담는다 — 입력/출력 단가가 다른 요금제에서 추정 비용을
+    계산할 때 그대로 쓸 수 있게 하기 위함."""
+    init_db()
+    with _connect() as con:
+        rows = con.execute(
+            "SELECT feature, COUNT(*) AS calls, "
+            "SUM(prompt_tokens) AS prompt_tokens, "
+            "SUM(output_tokens + thoughts_tokens) AS output_tokens, "
+            "SUM(total_tokens) AS tokens, "
+            "SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failed "
+            "FROM api_usage_log WHERE ts >= datetime('now', :since) GROUP BY feature",
+            {"since": f"-{days} days"},
+        ).fetchall()
+        return {
+            r[0]: {
+                "calls": r[1], "prompt_tokens": r[2] or 0, "output_tokens": r[3] or 0,
+                "tokens": r[4] or 0, "failed": r[5],
+            }
+            for r in rows
+        }
+
+
+def get_api_usage_daily(days: int = 30) -> list[dict]:
+    """최근 days일간 일자별 호출 수·토큰 합계. 날짜 오름차순."""
+    init_db()
+    with _connect() as con:
+        rows = con.execute(
+            "SELECT date(ts) AS d, COUNT(*) AS calls, SUM(total_tokens) AS tokens "
+            "FROM api_usage_log WHERE ts >= datetime('now', :since) "
+            "GROUP BY date(ts) ORDER BY d",
+            {"since": f"-{days} days"},
+        ).fetchall()
+        return [{"date": r[0], "calls": r[1], "tokens": r[2] or 0} for r in rows]
 
 
 def _upsert_vector(con: sqlite3.Connection, table: str, rowid: int, embedding: list[float]) -> None:

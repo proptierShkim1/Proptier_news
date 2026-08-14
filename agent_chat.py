@@ -90,10 +90,19 @@ def _send_with_key_failover(system_instruction: str, seeded_history: list, messa
                 model=summarizer._model_name(), config=config, history=seeded_history,
             )
             response = chat.send_message(message)
+            usage = response.usage_metadata
+            db.insert_api_usage(
+                "agent_chat", summarizer._model_name(), ok=True,
+                prompt_tokens=(usage.prompt_token_count or 0) if usage else 0,
+                output_tokens=(usage.candidates_token_count or 0) if usage else 0,
+                thoughts_tokens=(usage.thoughts_token_count or 0) if usage else 0,
+                total_tokens=(usage.total_token_count or 0) if usage else 0,
+            )
             text = (response.text or "").strip()
             if text:
                 return text
         except Exception:
+            db.insert_api_usage("agent_chat", summarizer._model_name(), ok=False)
             continue
     return "응답 생성에 실패했습니다. 잠시 후 다시 시도해주세요."
 

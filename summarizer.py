@@ -42,7 +42,10 @@ def _build_prompt(title: str, content: str) -> str:
 def summarize_article(title: str, content: str) -> str:
     """제목+원문을 Gemini로 요약해 반환한다. 키가 없거나 원문이 비었거나 모든 키 호출이
     실패하면 빈 문자열을 반환한다 — 호출부(collector.py)는 이 경우 기존 폴백(원문 일부
-    발췌)을 그대로 쓰므로 예외를 던지지 않는다."""
+    발췌)을 그대로 쓰므로 예외를 던지지 않는다. 호출마다 성공/실패와 토큰 사용량을
+    api_usage_log에 남겨 설정 > API 사용량 탭에서 조회할 수 있게 한다."""
+    import db
+
     content = (content or "").strip()
     keys = _load_api_keys()
     if not keys or not content:
@@ -53,10 +56,19 @@ def summarize_article(title: str, content: str) -> str:
         try:
             client = genai.Client(api_key=key)
             response = client.models.generate_content(model=_model_name(), contents=prompt)
+            usage = response.usage_metadata
+            db.insert_api_usage(
+                "summarizer", _model_name(), ok=True,
+                prompt_tokens=(usage.prompt_token_count or 0) if usage else 0,
+                output_tokens=(usage.candidates_token_count or 0) if usage else 0,
+                thoughts_tokens=(usage.thoughts_token_count or 0) if usage else 0,
+                total_tokens=(usage.total_token_count or 0) if usage else 0,
+            )
             text = (response.text or "").strip()
             if text:
                 return text
         except Exception:
+            db.insert_api_usage("summarizer", _model_name(), ok=False)
             continue
     return ""
 
