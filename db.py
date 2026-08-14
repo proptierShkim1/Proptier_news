@@ -658,6 +658,30 @@ def distinct_activity_ips() -> list[str]:
         return [row[0] for row in con.execute("SELECT DISTINCT ip FROM activity_log ORDER BY ip")]
 
 
+def count_activity_log_by_action(action: str, days: int = 30) -> int:
+    """최근 days일간 activity_log에서 특정 action(예: "PDF 생성")이 몇 번 기록됐는지
+    집계한다. IP별로 나누지 않고 전체 건수만 세므로 개인 식별 정보를 노출하지 않는다."""
+    init_db()
+    with _connect() as con:
+        return con.execute(
+            "SELECT COUNT(*) FROM activity_log WHERE action = ? AND ts >= datetime('now', ?)",
+            [action, f"-{days} days"],
+        ).fetchone()[0]
+
+
+def get_top_viewed_policy_events(limit: int = 5) -> list[dict]:
+    """조회수(view_count)가 가장 높은 정책 보도자료 상위 limit건을 반환한다."""
+    init_db()
+    with _connect() as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT title, source, view_count, announced_at FROM policy_events "
+            "ORDER BY view_count DESC LIMIT ?",
+            [limit],
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def insert_api_usage(
     feature: str, model: str, ok: bool = True,
     prompt_tokens: int = 0, output_tokens: int = 0, thoughts_tokens: int = 0, total_tokens: int = 0,

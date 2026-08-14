@@ -493,6 +493,35 @@ def test_distinct_activity_ips_returns_sorted_unique_ips(tmp_path, monkeypatch):
     assert db.distinct_activity_ips() == ["1.1.1.1", "2.2.2.2"]
 
 
+def test_count_activity_log_by_action_filters_action_and_window(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.log_activity("1.1.1.1", "PDF 보고서", "PDF 생성")
+    db.log_activity("1.1.1.1", "PDF 보고서", "PDF 생성")
+    db.log_activity("2.2.2.2", "오늘의 뉴스", "페이지 방문")
+    old_ts = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%d %H:%M:%S")
+    with db._connect() as con:
+        con.execute(
+            "UPDATE activity_log SET ts = ? WHERE action = 'PDF 생성' AND ip = '1.1.1.1' "
+            "AND id = (SELECT MIN(id) FROM activity_log WHERE action = 'PDF 생성')",
+            [old_ts],
+        )
+
+    assert db.count_activity_log_by_action("PDF 생성", days=30) == 1
+    assert db.count_activity_log_by_action("PDF 생성", days=60) == 2
+    assert db.count_activity_log_by_action("페이지 방문", days=30) == 1
+
+
+def test_get_top_viewed_policy_events_orders_by_view_count_desc(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_policy_event({**_policy_event(url="https://x/1"), "view_count": 50})
+    db.insert_policy_event({**_policy_event(url="https://x/2"), "view_count": 300})
+    db.insert_policy_event({**_policy_event(url="https://x/3"), "view_count": 120})
+
+    top = db.get_top_viewed_policy_events(limit=2)
+
+    assert [t["view_count"] for t in top] == [300, 120]
+
+
 def _isolate_small_vectors(tmp_path, monkeypatch):
     """vec0 가상 테이블은 컬럼 차원이 고정이라, 실제 3072차원 대신 테스트용 4차원
     벡터를 쓰도록 VECTOR_DIM을 낮춘다 — DB 파일도 매번 새로 만들어지므로 테스트 간

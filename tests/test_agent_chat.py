@@ -485,3 +485,59 @@ def test_compare_collection_periods_handles_zero_previous_period(monkeypatch):
     result = agent_chat.compare_collection_periods(period_days=7)
 
     assert result["change_pct"] is None
+
+
+def test_get_api_cost_summary_computes_estimated_cost_per_feature(monkeypatch):
+    monkeypatch.setattr(agent_chat.db, "get_api_usage_summary", lambda days: {
+        "summarizer": {"calls": 2, "prompt_tokens": 1_000_000, "output_tokens": 0, "tokens": 1_000_000, "failed": 0},
+        "agent_chat": {"calls": 1, "prompt_tokens": 0, "output_tokens": 1_000_000, "tokens": 1_000_000, "failed": 1},
+    })
+
+    result = agent_chat.get_api_cost_summary(days=30)
+
+    assert result["by_feature"]["summarizer"]["estimated_cost_usd"] == 0.3
+    assert result["by_feature"]["agent_chat"]["estimated_cost_usd"] == 2.5
+    assert result["total_calls"] == 3
+    assert result["total_tokens"] == 2_000_000
+    assert result["total_estimated_cost_usd"] == 2.8
+
+
+def test_get_api_cost_summary_returns_zero_totals_when_no_usage(monkeypatch):
+    monkeypatch.setattr(agent_chat.db, "get_api_usage_summary", lambda days: {})
+
+    result = agent_chat.get_api_cost_summary(days=30)
+
+    assert result == {
+        "by_feature": {}, "total_calls": 0, "total_tokens": 0, "total_estimated_cost_usd": 0.0,
+    }
+
+
+def test_get_tracked_brands_groups_by_role(monkeypatch):
+    monkeypatch.setattr(agent_chat.utils, "load_keywords", lambda: {"brands": [
+        {"name": "프롭티어", "role": "own"},
+        {"name": "직방", "role": "competitor"},
+        {"name": "다방", "role": "competitor"},
+        {"name": "AI", "role": "market"},
+    ]})
+
+    result = agent_chat.get_tracked_brands()
+
+    assert result == {
+        "own": ["프롭티어"], "competitor": ["직방", "다방"], "market": ["AI"],
+    }
+
+
+def test_get_pdf_report_stats_delegates_to_db(monkeypatch):
+    monkeypatch.setattr(
+        agent_chat.db, "count_activity_log_by_action",
+        lambda action, days: 7 if action == "PDF 생성" else 0,
+    )
+
+    assert agent_chat.get_pdf_report_stats(days=30) == {"count": 7}
+
+
+def test_get_top_viewed_policy_events_delegates_to_db(monkeypatch):
+    top = [{"title": "제목", "source": "국토부", "view_count": 500, "announced_at": "2026-08-01"}]
+    monkeypatch.setattr(agent_chat.db, "get_top_viewed_policy_events", lambda limit: top)
+
+    assert agent_chat.get_top_viewed_policy_events(limit=5) == top

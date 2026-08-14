@@ -23,6 +23,7 @@ import db
 import news_feed
 import policy_feed
 import summarizer
+import utils
 
 _BASE_SYSTEM_INSTRUCTION = (
     "너는 프롭티어(부동산 AI 프롭테크 기업) 사내에서 쓰는 어시스턴트야. 한국어로 "
@@ -336,11 +337,99 @@ def compare_collection_periods(period_days: int = 7) -> dict:
     }
 
 
+# views/settings.py의 "API 사용량" 탭과 동일한 추정 단가(USD/100만 토큰) — 하나를
+# 바꾸면 다른 쪽도 같이 갱신할 것.
+_PRICE_PER_1M_INPUT_USD = 0.30
+_PRICE_PER_1M_OUTPUT_USD = 2.50
+
+
+def get_api_cost_summary(days: int = 30) -> dict:
+    """Gemini API 호출량과 추정 비용을 알려준다 — "이번 달 API 비용 얼마야?" 같은 질문에
+    쓴다. 기능별(summarizer=기사요약/agent_chat=AI AGENT 대화/vectorizer=임베딩) 호출
+    수·토큰·추정 비용과 전체 합계를 담는다. 비용은 공개 요금 기준 추정치이며 실제
+    청구 금액과 다를 수 있다.
+
+    Args:
+        days: 최근 며칠간을 볼지 (기본 30일).
+
+    Returns:
+        {"by_feature": {기능명: {"calls": int, "tokens": int, "failed": int,
+        "estimated_cost_usd": float}}, "total_calls": int, "total_tokens": int,
+        "total_estimated_cost_usd": float}
+    """
+    summary = db.get_api_usage_summary(days=days)
+    by_feature = {}
+    total_cost = 0.0
+    total_calls = 0
+    total_tokens = 0
+    for feature, v in summary.items():
+        cost = (
+            (v["prompt_tokens"] / 1_000_000) * _PRICE_PER_1M_INPUT_USD
+            + (v["output_tokens"] / 1_000_000) * _PRICE_PER_1M_OUTPUT_USD
+        )
+        by_feature[feature] = {
+            "calls": v["calls"], "tokens": v["tokens"], "failed": v["failed"],
+            "estimated_cost_usd": round(cost, 4),
+        }
+        total_cost += cost
+        total_calls += v["calls"]
+        total_tokens += v["tokens"]
+    return {
+        "by_feature": by_feature,
+        "total_calls": total_calls,
+        "total_tokens": total_tokens,
+        "total_estimated_cost_usd": round(total_cost, 4),
+    }
+
+
+def get_tracked_brands() -> dict:
+    """현재 시스템이 수집하도록 등록된 브랜드/키워드 목록을 역할별로 알려준다 — "지금
+    우리가 추적하는 경쟁사가 뭐야?" 같은 질문에 쓴다.
+
+    Returns:
+        {"own": [...], "competitor": [...], "market": [...]} — 각 리스트는 브랜드명.
+    """
+    cfg = utils.load_keywords()
+    result = {"own": [], "competitor": [], "market": []}
+    for b in cfg.get("brands", []):
+        role = b.get("role")
+        if role in result:
+            result[role].append(b["name"])
+    return result
+
+
+def get_pdf_report_stats(days: int = 30) -> dict:
+    """최근 N일간 PDF 보고서가 몇 번 생성됐는지 알려준다. 개인별 접속 IP는 노출하지
+    않고 전체 건수만 집계한다.
+
+    Args:
+        days: 최근 며칠간을 볼지 (기본 30일).
+
+    Returns:
+        {"count": int}
+    """
+    return {"count": db.count_activity_log_by_action("PDF 생성", days=days)}
+
+
+def get_top_viewed_policy_events(limit: int = 5) -> list[dict]:
+    """조회수가 가장 높은 정책 보도자료 상위 N건을 알려준다.
+
+    Args:
+        limit: 몇 건까지 보여줄지 (기본 5건).
+
+    Returns:
+        [{"title": str, "source": str, "view_count": int, "announced_at": str}, ...]
+        조회수 내림차순.
+    """
+    return db.get_top_viewed_policy_events(limit=limit)
+
+
 _STATS_TOOLS = [
     get_channel_counts, get_overview_stats, get_brand_mention_count, get_policy_source_counts,
     get_briefing_highlights, get_collection_health, compare_brand_mentions, get_vectorization_status,
     get_top_mentioned_brands, get_news_category_counts, get_policy_category_counts,
-    compare_collection_periods,
+    compare_collection_periods, get_api_cost_summary, get_tracked_brands, get_pdf_report_stats,
+    get_top_viewed_policy_events,
 ]
 
 
