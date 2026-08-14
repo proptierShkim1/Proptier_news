@@ -240,6 +240,17 @@ def count_mentions_by_brand(brand: str) -> int:
         ).fetchone()[0]
 
 
+def count_mentions_by_brand_since(brand: str, days: int) -> int:
+    """최근 days일간 특정 브랜드의 mentions 건수. collected_at은 'YYYY-MM-DD HH:MM:SS'
+    TEXT라 SQLite datetime('now', '-N days')와 문자열 비교로 바로 걸러진다."""
+    init_db()
+    with _connect() as con:
+        return con.execute(
+            "SELECT COUNT(*) FROM mentions WHERE brand = ? AND collected_at >= datetime('now', ?)",
+            [brand, f"-{days} days"],
+        ).fetchone()[0]
+
+
 def get_mentions(
     brand: str = "", channel: str = "", channels: list | None = None, limit: int = 3000
 ) -> list[dict]:

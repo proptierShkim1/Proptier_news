@@ -344,3 +344,89 @@ def test_ask_logs_api_usage_as_failed_when_all_keys_fail(monkeypatch):
         agent_chat.ask([], "안녕")
 
     mock_usage.assert_called_once_with("agent_chat", agent_chat.summarizer._model_name(), ok=False)
+
+
+def test_get_briefing_highlights_returns_archived_content_when_available(monkeypatch):
+    archived = {
+        "total_count": 5, "channel_counts": {"네이버": 5}, "channel_top_news": {"네이버": []},
+        "own_brand_news": [], "competitor_news": [], "market_news": [],
+    }
+    monkeypatch.setattr(agent_chat.db, "get_briefing_archive", lambda date: archived)
+
+    result = agent_chat.get_briefing_highlights("2026-08-10")
+
+    assert result["found"] is True
+    assert result["total_count"] == 5
+    assert result["channel_counts"] == {"네이버": 5}
+
+
+def test_get_briefing_highlights_computes_live_when_not_yet_archived(monkeypatch):
+    monkeypatch.setattr(agent_chat.db, "get_briefing_archive", lambda date: None)
+    monkeypatch.setattr(agent_chat.db, "get_mentions_by_collected_date", lambda date: [{"id": 1}])
+    monkeypatch.setattr(agent_chat.news_feed, "own_brand_names", lambda: {"프롭티어"})
+    monkeypatch.setattr(agent_chat.news_feed, "competitor_brand_names", lambda: {"직방"})
+    monkeypatch.setattr(agent_chat.news_feed, "market_brand_names", lambda: {"AI"})
+    live_content = {
+        "total_count": 1, "channel_counts": {"네이버": 1}, "channel_top_news": {},
+        "own_brand_news": [], "competitor_news": [], "market_news": [],
+    }
+    monkeypatch.setattr(
+        agent_chat.news_feed, "build_briefing_archive_content",
+        lambda mentions, own, comp, mkt: live_content,
+    )
+
+    result = agent_chat.get_briefing_highlights("2026-08-14")
+
+    assert result["found"] is True
+    assert result["total_count"] == 1
+
+
+def test_get_briefing_highlights_returns_not_found_when_no_data_at_all(monkeypatch):
+    monkeypatch.setattr(agent_chat.db, "get_briefing_archive", lambda date: None)
+    monkeypatch.setattr(agent_chat.db, "get_mentions_by_collected_date", lambda date: [])
+
+    assert agent_chat.get_briefing_highlights("2026-01-01") == {"found": False}
+
+
+def test_get_collection_health_reports_last_batch_per_channel_group(monkeypatch):
+    def fake_run_batches(limit, channels):
+        if channels == ["네이버", "구글", "다음", "커뮤니티"]:
+            return [{"ran_at": "2026-08-14 09:00:00", "trigger": "자동", "ok": 1, "message": ""}]
+        if channels == ["매경API"]:
+            return [{"ran_at": "2026-08-14 08:00:00", "trigger": "수동", "ok": 0, "message": "오류"}]
+        return []
+
+    monkeypatch.setattr(agent_chat.db, "get_run_batches", fake_run_batches)
+    monkeypatch.setattr(
+        agent_chat.db, "get_policy_run_batches",
+        lambda limit: [{"ran_at": "2026-08-14 07:00:00", "trigger": "자동", "ok": 1, "message": ""}],
+    )
+
+    health = agent_chat.get_collection_health()
+
+    assert health["신규 게시물"]["ok"] is True
+    assert health["매경API"]["ok"] is False
+    assert health["매경API"]["message"] == "오류"
+    assert health["정부 정책"]["last_run_at"] == "2026-08-14 07:00:00"
+    assert "네이버뉴스API" not in health
+
+
+def test_compare_brand_mentions_returns_count_per_brand(monkeypatch):
+    counts = {"직방": 42, "프롭티어": 7}
+    monkeypatch.setattr(agent_chat.db, "count_mentions_by_brand_since", lambda brand, days: counts[brand])
+
+    result = agent_chat.compare_brand_mentions(["직방", "프롭티어"], days=30)
+
+    assert result == {"직방": 42, "프롭티어": 7}
+
+
+def test_get_vectorization_status_aggregates_counts(monkeypatch):
+    monkeypatch.setattr(agent_chat.db, "count_mentions", lambda: 100)
+    monkeypatch.setattr(agent_chat.db, "count_mentions_without_embedding", lambda: 10)
+    monkeypatch.setattr(agent_chat.db, "count_policy_events", lambda: 50)
+    monkeypatch.setattr(agent_chat.db, "count_policy_events_without_embedding", lambda: 2)
+
+    assert agent_chat.get_vectorization_status() == {
+        "mentions_total": 100, "mentions_pending": 10,
+        "policy_events_total": 50, "policy_events_pending": 2,
+    }

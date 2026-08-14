@@ -20,6 +20,7 @@ from google import genai
 from google.genai import types
 
 import db
+import news_feed
 import summarizer
 
 _BASE_SYSTEM_INSTRUCTION = (
@@ -161,7 +162,107 @@ def get_policy_source_counts() -> dict:
     return db.get_policy_source_counts()
 
 
-_STATS_TOOLS = [get_channel_counts, get_overview_stats, get_brand_mention_count, get_policy_source_counts]
+def get_briefing_highlights(date: str) -> dict:
+    """특정 날짜에 확정된(아카이빙된) 브리핑의 실제 내용을 알려준다 — 단순 건수가 아니라
+    그날의 채널별 주요 뉴스, 프롭티어 관련 뉴스, 경쟁사 동향, 시장 동향을 그대로 담고
+    있다. 아직 확정 안 된 날짜(오늘 등)라도 그 시점까지 수집된 데이터로 즉석에서 같은
+    내용을 계산해 반환한다.
+
+    Args:
+        date: 조회할 날짜, YYYY-MM-DD 형식.
+
+    Returns:
+        해당 날짜에 데이터가 전혀 없으면 {"found": False}. 있으면 {"found": True,
+        "total_count": int, "channel_counts": {...}, "channel_top_news": {...},
+        "own_brand_news": [...], "competitor_news": [...], "market_news": [...]}.
+    """
+    content = db.get_briefing_archive(date)
+    if content is None:
+        day_mentions = db.get_mentions_by_collected_date(date)
+        if not day_mentions:
+            return {"found": False}
+        content = news_feed.build_briefing_archive_content(
+            day_mentions, news_feed.own_brand_names(),
+            news_feed.competitor_brand_names(), news_feed.market_brand_names(),
+        )
+    return {
+        "found": True,
+        "total_count": content["total_count"],
+        "channel_counts": content["channel_counts"],
+        "channel_top_news": content["channel_top_news"],
+        "own_brand_news": content["own_brand_news"],
+        "competitor_news": content["competitor_news"],
+        "market_news": content["market_news"],
+    }
+
+
+def get_collection_health() -> dict:
+    """수집 채널별로 가장 최근 실행이 언제였고 성공했는지 알려준다 — 신규 게시물(네이버·
+    구글·다음·커뮤니티 통합)/네이버뉴스API/매경API/정부 정책(7개 기관 통합) 각각 가장
+    최근 배치 1건 기준.
+
+    Returns:
+        채널 그룹명을 키로, {"last_run_at": "YYYY-MM-DD HH:MM:SS", "trigger": "수동|자동",
+        "ok": bool, "message": str} 값을 갖는 딕셔너리. 한 번도 실행 안 된 채널은 빠진다.
+    """
+    result = {}
+    channel_groups = {
+        "신규 게시물": ["네이버", "구글", "다음", "커뮤니티"],
+        "네이버뉴스API": ["네이버뉴스API"],
+        "매경API": ["매경API"],
+    }
+    for label, channels in channel_groups.items():
+        batches = db.get_run_batches(limit=1, channels=channels)
+        if batches:
+            b = batches[0]
+            result[label] = {
+                "last_run_at": b["ran_at"], "trigger": b["trigger"],
+                "ok": bool(b["ok"]), "message": b["message"],
+            }
+    policy_batches = db.get_policy_run_batches(limit=1)
+    if policy_batches:
+        b = policy_batches[0]
+        result["정부 정책"] = {
+            "last_run_at": b["ran_at"], "trigger": b["trigger"],
+            "ok": bool(b["ok"]), "message": b["message"],
+        }
+    return result
+
+
+def compare_brand_mentions(brands: list[str], days: int = 30) -> dict:
+    """여러 브랜드의 최근 N일간 언급 건수를 비교한다 — "직방이랑 프롭티어 이번 달 언급
+    추이 비교해줘" 같은 질문에 쓴다.
+
+    Args:
+        brands: 비교할 브랜드명 리스트 (예: ["직방", "프롭티어"]).
+        days: 최근 며칠간을 볼지 (기본 30일).
+
+    Returns:
+        브랜드명을 키로, 최근 days일간 언급 건수를 값으로 갖는 딕셔너리.
+    """
+    return {brand: db.count_mentions_by_brand_since(brand, days) for brand in brands}
+
+
+def get_vectorization_status() -> dict:
+    """벡터화(임베딩 생성, AI AGENT 검색의 기반) 진행 현황을 알려준다 — 전체 건수 대비
+    아직 벡터화 안 된 건수.
+
+    Returns:
+        {"mentions_total": int, "mentions_pending": int, "policy_events_total": int,
+        "policy_events_pending": int}.
+    """
+    return {
+        "mentions_total": db.count_mentions(),
+        "mentions_pending": db.count_mentions_without_embedding(),
+        "policy_events_total": db.count_policy_events(),
+        "policy_events_pending": db.count_policy_events_without_embedding(),
+    }
+
+
+_STATS_TOOLS = [
+    get_channel_counts, get_overview_stats, get_brand_mention_count, get_policy_source_counts,
+    get_briefing_highlights, get_collection_health, compare_brand_mentions, get_vectorization_status,
+]
 
 
 def is_grounding_sufficient(

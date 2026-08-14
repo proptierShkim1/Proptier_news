@@ -31,6 +31,19 @@ def test_count_mentions_by_brand_counts_only_that_brand(tmp_path, monkeypatch):
     assert db.count_mentions_by_brand("없는브랜드") == 0
 
 
+def test_count_mentions_by_brand_since_excludes_older_than_window(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    recent = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    old = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%d %H:%M:%S")
+    db.insert_mention({**_mention(url="https://x/1", brand="직방"), "collected_at": recent})
+    db.insert_mention({**_mention(url="https://x/2", brand="직방"), "collected_at": old})
+    db.insert_mention({**_mention(url="https://x/3", brand="다방"), "collected_at": recent})
+
+    assert db.count_mentions_by_brand_since("직방", days=30) == 1
+    assert db.count_mentions_by_brand_since("다방", days=30) == 1
+    assert db.count_mentions_by_brand_since("직방", days=60) == 2
+
+
 def test_get_mentions_channels_filter_matches_any_of_the_given_channels(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     db.insert_mention(_mention(url="https://x/1", channel="네이버"))
