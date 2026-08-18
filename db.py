@@ -159,6 +159,21 @@ def _ensure_column(con: sqlite3.Connection, table: str, column: str, definition:
         con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
+def _coerce_ints(rows: list[dict], *fields: str) -> list[dict]:
+    """SQLite는 컬럼 타입을 강제하지 않아서, .recover 기반 복구 등으로 INTEGER 컬럼에
+    TEXT 값이 섞여 들어갈 수 있다(2026-08-18 사고: view_count/fetched 일부가 문자열로
+    저장됨). 그 상태로 화면에서 f"{v:,}" 포맷하거나 v >= n 비교, sum(v)를 하면 TypeError로
+    죽으므로, DB 경계에서 한 번에 정수로 맞춰 내보낸다."""
+    for row in rows:
+        for f in fields:
+            if f in row and row[f] is not None:
+                try:
+                    row[f] = int(row[f])
+                except (TypeError, ValueError):
+                    row[f] = 0
+    return rows
+
+
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _connect() as con:
@@ -288,7 +303,7 @@ def get_policy_events_since(days: int, limit: int = 5000) -> list[dict]:
             "ORDER BY collected_at DESC LIMIT ?",
             [f"-{days} days", limit],
         ).fetchall()
-        return [dict(r) for r in rows]
+        return _coerce_ints([dict(r) for r in rows], "view_count")
 
 
 def count_mentions_between(start_days_ago: int, end_days_ago: int) -> int:
@@ -355,7 +370,7 @@ def get_run_logs(limit: int = 50) -> list[dict]:
         rows = con.execute(
             "SELECT * FROM run_logs ORDER BY ran_at DESC LIMIT :limit", {"limit": limit}
         ).fetchall()
-        return [dict(r) for r in rows]
+        return _coerce_ints([dict(r) for r in rows], "fetched", "inserted", "skipped", "ok")
 
 
 _LEGACY_BATCH_GAP_SECONDS = 300
@@ -375,7 +390,10 @@ def get_run_batches(limit: int = 50, channels: list[str] | None = None) -> list[
 
     with _connect() as con:
         con.row_factory = sqlite3.Row
-        rows = [dict(r) for r in con.execute(query, params).fetchall()]
+        rows = _coerce_ints(
+            [dict(r) for r in con.execute(query, params).fetchall()],
+            "fetched", "inserted", "skipped", "ok",
+        )
 
     groups: dict[str, list[dict]] = {}
     legacy_key = None
@@ -461,7 +479,7 @@ def get_policy_events(department: str = "", limit: int = 3000) -> list[dict]:
     with _connect() as con:
         con.row_factory = sqlite3.Row
         rows = con.execute(query, params).fetchall()
-        return [dict(r) for r in rows]
+        return _coerce_ints([dict(r) for r in rows], "view_count")
 
 
 def delete_policy_events(ids: list[int]) -> int:
@@ -502,7 +520,7 @@ def get_policy_run_logs(limit: int = 50) -> list[dict]:
         rows = con.execute(
             "SELECT * FROM policy_run_logs ORDER BY ran_at DESC LIMIT :limit", {"limit": limit}
         ).fetchall()
-        return [dict(r) for r in rows]
+        return _coerce_ints([dict(r) for r in rows], "fetched", "inserted", "skipped", "ok")
 
 
 def get_policy_run_batches(limit: int = 50) -> list[dict]:
@@ -512,9 +530,9 @@ def get_policy_run_batches(limit: int = 50) -> list[dict]:
     init_db()
     with _connect() as con:
         con.row_factory = sqlite3.Row
-        rows = [dict(r) for r in con.execute(
+        rows = _coerce_ints([dict(r) for r in con.execute(
             "SELECT * FROM policy_run_logs ORDER BY ran_at ASC, id ASC LIMIT 2000"
-        ).fetchall()]
+        ).fetchall()], "fetched", "inserted", "skipped", "ok")
 
     groups: dict[str, list[dict]] = {}
     for row in rows:
@@ -667,7 +685,7 @@ def get_vector_run_logs(limit: int = 50) -> list[dict]:
         rows = con.execute(
             "SELECT * FROM vector_run_logs ORDER BY ran_at DESC LIMIT :limit", {"limit": limit},
         ).fetchall()
-        return [dict(r) for r in rows]
+        return _coerce_ints([dict(r) for r in rows], "fetched", "inserted", "skipped", "ok")
 
 
 def log_activity(ip: str, page: str, action: str, detail: str = "") -> None:
@@ -732,7 +750,7 @@ def get_top_viewed_policy_events(limit: int = 5) -> list[dict]:
             "ORDER BY view_count DESC LIMIT ?",
             [limit],
         ).fetchall()
-        return [dict(r) for r in rows]
+        return _coerce_ints([dict(r) for r in rows], "view_count")
 
 
 def insert_api_usage(
@@ -940,7 +958,7 @@ def get_briefing_archive(date: str) -> dict | None:
         result = dict(row)
         for key in ("channel_counts", "channel_top_news", "own_brand_news", "competitor_news", "market_news"):
             result[key] = json.loads(result[key])
-        return result
+        return _coerce_ints([result], "total_count")[0]
 
 
 def get_archived_briefing_dates() -> set[str]:

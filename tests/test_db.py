@@ -338,6 +338,19 @@ def test_get_policy_run_batches_marks_ok_false_when_any_source_failed(tmp_path, 
     assert "타임아웃" in batches[0]["message"]
 
 
+def test_get_run_batches_survives_non_numeric_fetched(tmp_path, monkeypatch):
+    """.recover 복구 등으로 fetched가 숫자로 변환 불가능한 문자열로 들어간 경우
+    sum()이 TypeError로 죽지 않고 그 행을 0으로 취급해야 한다."""
+    _isolate(tmp_path, monkeypatch)
+    db.insert_run_log(_run_log_entry(run_id="batch1"))
+    with db._connect() as con:
+        con.execute("UPDATE run_logs SET fetched = '깨짐' WHERE run_id = 'batch1'")
+
+    batches = db.get_run_batches()
+
+    assert batches[0]["fetched"] == 0
+
+
 def test_get_run_batches_without_channels_filter_returns_everything(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     db.insert_run_log(_run_log_entry(channel="네이버", run_id="batch1", ran_at="2026-08-04 09:00:00"))
@@ -568,6 +581,34 @@ def test_get_top_viewed_policy_events_orders_by_view_count_desc(tmp_path, monkey
     top = db.get_top_viewed_policy_events(limit=2)
 
     assert [t["view_count"] for t in top] == [300, 120]
+
+
+def test_coerce_ints_normalizes_string_none_and_garbage_values():
+    rows = [
+        {"view_count": "700"},
+        {"view_count": None},
+        {"view_count": "완전히-깨진값"},
+        {"view_count": 42},
+    ]
+
+    result = db._coerce_ints(rows, "view_count")
+
+    assert [r["view_count"] for r in result] == [700, None, 0, 42]
+
+
+def test_get_policy_events_survives_non_numeric_view_count(tmp_path, monkeypatch):
+    """.recover 복구 등으로 INTEGER 컬럼에 숫자로 변환 불가능한 문자열이 들어간 경우를
+    재현한다 — 화면에서 f"{view_count:,}" 포맷이나 >= 비교를 할 때 TypeError로 죽지 않고
+    0으로 정규화되어야 한다."""
+    _isolate(tmp_path, monkeypatch)
+    db.insert_policy_event({**_policy_event(url="https://x/1"), "view_count": 50})
+    event_id = db.get_policy_events()[0]["id"]
+    with db._connect() as con:
+        con.execute("UPDATE policy_events SET view_count = '깨짐' WHERE id = ?", [event_id])
+
+    events = db.get_policy_events()
+
+    assert events[0]["view_count"] == 0
 
 
 def _isolate_small_vectors(tmp_path, monkeypatch):
