@@ -46,12 +46,13 @@ def test_count_mentions_by_brand_since_excludes_older_than_window(tmp_path, monk
 
 def test_get_top_mentioned_brands_returns_descending_by_count(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
-    db.insert_mention(_mention(url="https://x/1", brand="직방"))
-    db.insert_mention(_mention(url="https://x/2", brand="직방"))
-    db.insert_mention(_mention(url="https://x/3", brand="직방"))
-    db.insert_mention(_mention(url="https://x/4", brand="다방"))
-    db.insert_mention(_mention(url="https://x/5", brand="다방"))
-    db.insert_mention(_mention(url="https://x/6", brand="부동산114"))
+    recent = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    db.insert_mention({**_mention(url="https://x/1", brand="직방"), "collected_at": recent})
+    db.insert_mention({**_mention(url="https://x/2", brand="직방"), "collected_at": recent})
+    db.insert_mention({**_mention(url="https://x/3", brand="직방"), "collected_at": recent})
+    db.insert_mention({**_mention(url="https://x/4", brand="다방"), "collected_at": recent})
+    db.insert_mention({**_mention(url="https://x/5", brand="다방"), "collected_at": recent})
+    db.insert_mention({**_mention(url="https://x/6", brand="부동산114"), "collected_at": recent})
 
     top = db.get_top_mentioned_brands(days=30, limit=2)
 
@@ -436,6 +437,53 @@ def test_update_policy_event_embedding_removes_it_from_pending(tmp_path, monkeyp
 
     assert db.count_policy_events_without_embedding() == 0
     assert db.get_policy_events()[0]["embedding"] == "[0.3, 0.4]"
+
+
+def test_get_mention_embeddings_for_backup_skips_rows_without_embedding(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1"))
+    db.insert_mention(_mention(url="https://x/2"))
+    with_embedding = next(m for m in db.get_mentions() if m["url"] == "https://x/1")
+    db.update_mention_embedding(with_embedding["id"], "[0.1, 0.2]")
+
+    backup = db.get_mention_embeddings_for_backup()
+
+    assert backup == [{"url": "https://x/1", "embedding": "[0.1, 0.2]"}]
+
+
+def test_restore_mention_embeddings_by_url_categorizes_restored_present_and_missing(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1"))
+    db.insert_mention(_mention(url="https://x/2"))
+    already = next(m for m in db.get_mentions() if m["url"] == "https://x/2")
+    db.update_mention_embedding(already["id"], "[9.0]")
+
+    result = db.restore_mention_embeddings_by_url([
+        {"url": "https://x/1", "embedding": "[1.0, 2.0]"},
+        {"url": "https://x/2", "embedding": "[8.0]"},
+        {"url": "https://x/does-not-exist", "embedding": "[1.0]"},
+    ])
+
+    assert result == {"restored": 1, "already_present": 1, "not_found": 1}
+    by_url = {m["url"]: m["embedding"] for m in db.get_mentions()}
+    assert by_url["https://x/1"] == "[1.0, 2.0]"
+    assert by_url["https://x/2"] == "[9.0]"  # 덮어쓰지 않음
+
+
+def test_restore_policy_event_embeddings_by_url_categorizes_restored_present_and_missing(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_policy_event({
+        "source": "국토부", "title": "제목", "url": "https://p/1", "department": "",
+        "announced_at": "2026-08-01", "view_count": 0, "collected_at": "2026-08-01 09:00:00",
+    })
+
+    result = db.restore_policy_event_embeddings_by_url([
+        {"url": "https://p/1", "embedding": "[1.0, 2.0]"},
+        {"url": "https://p/does-not-exist", "embedding": "[1.0]"},
+    ])
+
+    assert result == {"restored": 1, "already_present": 0, "not_found": 1}
+    assert db.get_policy_events()[0]["embedding"] == "[1.0, 2.0]"
 
 
 def test_insert_vector_run_log_and_get_vector_run_logs_orders_most_recent_first(tmp_path, monkeypatch):

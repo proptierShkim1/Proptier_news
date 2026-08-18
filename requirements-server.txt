@@ -4,7 +4,8 @@ python-dotenv==1.2.2
 paramiko
 requests
 beautifulsoup4
-pandas
+pandas==2.3.3
+pyarrow==23.0.1
 playwright
 google-genai
 sqlite-vec

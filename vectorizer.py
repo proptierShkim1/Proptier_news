@@ -124,17 +124,49 @@ def _vectorize_policy_events(limit: int, trigger: str, run_id: str) -> dict:
     return result
 
 
+_FULL_REINDEX_LIMIT = 1_000_000  # sync_vector_index는 Gemini 호출이 없어 벌크 한도를 둘 필요가 없다
+
+
+def export_vector_backup() -> dict:
+    """mentions.embedding/policy_events.embedding을 url 키로 묶어 백업용 dict를 만든다.
+    sqlite-vec 색인(mention_vectors/policy_vectors)은 이 값들로부터 언제든 재생성 가능한
+    파생 데이터라 백업 대상에서 뺀다 — 실제로 잃으면 안 되는 건 임베딩 원본뿐이다."""
+    return {
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "mentions": db.get_mention_embeddings_for_backup(),
+        "policy_events": db.get_policy_event_embeddings_for_backup(),
+    }
+
+
+def import_vector_backup(backup: dict) -> dict:
+    """백업 dict를 현재 DB에 되돌린다. url이 일치하고 아직 embedding이 비어있는 행에만
+    채워 넣는다(이미 값이 있는 행은 덮어쓰지 않음). 이후 sqlite-vec 색인도 함께 채운다."""
+    mention_result = db.restore_mention_embeddings_by_url(backup.get("mentions", []))
+    policy_result = db.restore_policy_event_embeddings_by_url(backup.get("policy_events", []))
+    index_result = sync_vector_index()
+    return {
+        "mentions_restored": mention_result["restored"],
+        "mentions_already_present": mention_result["already_present"],
+        "mentions_not_found": mention_result["not_found"],
+        "policy_restored": policy_result["restored"],
+        "policy_already_present": policy_result["already_present"],
+        "policy_not_found": policy_result["not_found"],
+        "index_synced": index_result,
+    }
+
+
 def sync_vector_index() -> dict:
     """mentions.embedding/policy_events.embedding에는 있지만 아직 sqlite-vec 색인
     (mention_vectors/policy_vectors)에는 없는 행을 채운다 — 색인 테이블이 나중에
     추가되었거나 색인이 유실된 경우를 복구하는 용도. vectorize_pending()이 매 실행마다
-    호출해서, 새로 벡터화한 건 외에 과거에 남아있던 누락분도 함께 메운다."""
-    mention_rows = db.get_mentions_missing_vector_index()
-    for row in mention_rows:
-        db.upsert_mention_vector(row["id"], json.loads(row["embedding"]))
-    policy_rows = db.get_policy_events_missing_vector_index()
-    for row in policy_rows:
-        db.upsert_policy_vector(row["id"], json.loads(row["embedding"]))
+    호출해서, 새로 벡터화한 건 외에 과거에 남아있던 누락분도 함께 메운다. Gemini 호출이
+    없는 순수 로컬 작업이라 건수를 굳이 제한하지 않는다(색인이 통째로 날아간 복구
+    시나리오에서 일부만 채우고 끝나면 안 되므로) — 커넥션도 하나로 재사용해 수천 건도
+    금방 끝난다."""
+    mention_rows = db.get_mentions_missing_vector_index(limit=_FULL_REINDEX_LIMIT)
+    db.upsert_mention_vectors_batch([(r["id"], json.loads(r["embedding"])) for r in mention_rows])
+    policy_rows = db.get_policy_events_missing_vector_index(limit=_FULL_REINDEX_LIMIT)
+    db.upsert_policy_vectors_batch([(r["id"], json.loads(r["embedding"])) for r in policy_rows])
     return {"mentions": len(mention_rows), "policy_events": len(policy_rows)}
 
 

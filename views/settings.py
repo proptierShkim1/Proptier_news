@@ -1153,6 +1153,7 @@ def _render_data_management():
 # ── 벡터 데이터 ────────────────────────────────────────────────────────────
 
 _VECTORIZE_SOURCE_LABELS = {"mentions": "뉴스", "policy_events": "정책"}
+VECTOR_BACKUP_DIR = ROOT / "data" / "vector_backups"
 
 
 @st.fragment(run_every=2)
@@ -1260,6 +1261,97 @@ def _render_vector_data_tab():
         st.dataframe(vector_df, use_container_width=True, hide_index=True)
     else:
         st.caption("아직 벡터화 이력이 없습니다.")
+
+    st.divider()
+    _render_vector_backup_restore()
+
+
+def _format_vector_restore_result(result: dict) -> str:
+    return (
+        f"복구 완료 — 뉴스 {result['mentions_restored']:,}건 반영"
+        f"(이미 있던 값 {result['mentions_already_present']:,}건, "
+        f"url을 현재 DB에서 못 찾음 {result['mentions_not_found']:,}건), "
+        f"정책 {result['policy_restored']:,}건 반영"
+        f"(이미 있던 값 {result['policy_already_present']:,}건, "
+        f"url을 현재 DB에서 못 찾음 {result['policy_not_found']:,}건) · "
+        f"색인 재생성 {result['index_synced']['mentions']:,}/{result['index_synced']['policy_events']:,}건"
+    )
+
+
+def _render_vector_backup_restore():
+    st.subheader("💾 벡터 백업 / 복구")
+    st.caption(
+        "sqlite-vec 색인(mention_vectors/policy_vectors)은 mentions.embedding/"
+        "policy_events.embedding 값으로부터 재생성 가능한 파생 데이터라, 여기서는 그 "
+        "원본 임베딩 값(url 키)만 파일로 백업합니다. DB 손상 등으로 색인이나 임베딩이 "
+        "날아갔을 때 Gemini API를 다시 호출하지 않고도 복구할 수 있습니다."
+    )
+
+    col_backup, col_rebuild = st.columns(2)
+    with col_backup:
+        if st.button("📦 지금 벡터 백업 만들기", key="vector_backup_create"):
+            backup = vectorizer.export_vector_backup()
+            VECTOR_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+            fname = f"vector_backup_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            (VECTOR_BACKUP_DIR / fname).write_text(
+                json.dumps(backup, ensure_ascii=False), encoding="utf-8",
+            )
+            db.log_activity(
+                st.session_state.get("_client_ip", ""), "설정 · 벡터 데이터", "벡터 백업 생성", fname,
+            )
+            st.session_state["_vector_backup_just_created"] = fname
+            st.success(
+                f"백업 완료: 뉴스 {len(backup['mentions']):,}건 · 정책 {len(backup['policy_events']):,}건 "
+                f"→ {fname}"
+            )
+            st.rerun()
+    with col_rebuild:
+        if st.button("🔁 현재 DB 임베딩으로 색인 재생성", key="vector_index_rebuild"):
+            result = vectorizer.sync_vector_index()
+            db.log_activity(
+                st.session_state.get("_client_ip", ""), "설정 · 벡터 데이터", "벡터 색인 재생성",
+                f"뉴스 {result['mentions']}건, 정책 {result['policy_events']}건",
+            )
+            st.success(f"색인 재생성 완료: 뉴스 {result['mentions']:,}건 · 정책 {result['policy_events']:,}건 반영")
+
+    backup_files = sorted(VECTOR_BACKUP_DIR.glob("vector_backup_*.json"), reverse=True) if VECTOR_BACKUP_DIR.exists() else []
+    if backup_files:
+        st.caption(f"서버에 저장된 백업 {len(backup_files)}개 (최신순)")
+        for f in backup_files[:10]:
+            size_kb = f.stat().st_size / 1024
+            c1, c2, c3 = st.columns([4, 1, 1])
+            with c1:
+                st.caption(f"📄 {f.name} · {size_kb:,.0f} KB")
+            with c2:
+                st.download_button(
+                    "다운로드", data=f.read_bytes(), file_name=f.name, mime="application/json",
+                    key=f"vector_backup_dl_{f.name}",
+                )
+            with c3:
+                if st.button("♻️ 복구", key=f"vector_backup_restore_{f.name}"):
+                    backup = json.loads(f.read_text(encoding="utf-8"))
+                    result = vectorizer.import_vector_backup(backup)
+                    db.log_activity(
+                        st.session_state.get("_client_ip", ""), "설정 · 벡터 데이터", "벡터 백업 복구", f.name,
+                    )
+                    st.success(_format_vector_restore_result(result))
+    else:
+        st.caption("아직 생성된 백업이 없습니다.")
+
+    st.divider()
+    st.markdown("**파일에서 복구**")
+    uploaded = st.file_uploader("백업 JSON 파일 업로드", type="json", key="vector_backup_upload")
+    if uploaded is not None and st.button("📥 업로드한 파일로 복구", key="vector_backup_restore_run"):
+        try:
+            backup = json.loads(uploaded.getvalue().decode("utf-8"))
+        except Exception:
+            st.error("올바른 JSON 파일이 아닙니다.")
+        else:
+            result = vectorizer.import_vector_backup(backup)
+            db.log_activity(
+                st.session_state.get("_client_ip", ""), "설정 · 벡터 데이터", "벡터 백업 복구", uploaded.name,
+            )
+            st.success(_format_vector_restore_result(result))
 
 
 # ── 로그 ──────────────────────────────────────────────────────────────────

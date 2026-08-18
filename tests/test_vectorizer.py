@@ -148,15 +148,49 @@ def test_vectorize_pending_counts_failed_embeddings_as_skipped():
 
 
 def test_sync_vector_index_backfills_mentions_and_policy_events_missing_from_index():
-    with patch("db.get_mentions_missing_vector_index", return_value=[{"id": 1, "embedding": "[0.1, 0.2]"}]), \
-         patch("db.get_policy_events_missing_vector_index", return_value=[{"id": 2, "embedding": "[0.3, 0.4]"}]), \
-         patch("db.upsert_mention_vector") as mock_upsert_mention, \
-         patch("db.upsert_policy_vector") as mock_upsert_policy:
+    with patch("db.get_mentions_missing_vector_index", return_value=[{"id": 1, "embedding": "[0.1, 0.2]"}]) as mock_get_mentions, \
+         patch("db.get_policy_events_missing_vector_index", return_value=[{"id": 2, "embedding": "[0.3, 0.4]"}]) as mock_get_policy, \
+         patch("db.upsert_mention_vectors_batch") as mock_upsert_mention, \
+         patch("db.upsert_policy_vectors_batch") as mock_upsert_policy:
         result = vectorizer.sync_vector_index()
 
-    mock_upsert_mention.assert_called_once_with(1, [0.1, 0.2])
-    mock_upsert_policy.assert_called_once_with(2, [0.3, 0.4])
+    mock_get_mentions.assert_called_once_with(limit=vectorizer._FULL_REINDEX_LIMIT)
+    mock_get_policy.assert_called_once_with(limit=vectorizer._FULL_REINDEX_LIMIT)
+    mock_upsert_mention.assert_called_once_with([(1, [0.1, 0.2])])
+    mock_upsert_policy.assert_called_once_with([(2, [0.3, 0.4])])
     assert result == {"mentions": 1, "policy_events": 1}
+
+
+def test_export_vector_backup_bundles_mentions_and_policy_events():
+    with patch("db.get_mention_embeddings_for_backup", return_value=[{"url": "u1", "embedding": "[0.1]"}]), \
+         patch("db.get_policy_event_embeddings_for_backup", return_value=[{"url": "u2", "embedding": "[0.2]"}]):
+        backup = vectorizer.export_vector_backup()
+
+    assert backup["mentions"] == [{"url": "u1", "embedding": "[0.1]"}]
+    assert backup["policy_events"] == [{"url": "u2", "embedding": "[0.2]"}]
+    assert "created_at" in backup
+
+
+def test_import_vector_backup_restores_matched_urls_and_rebuilds_index():
+    backup = {
+        "mentions": [{"url": "u1", "embedding": "[0.1]"}, {"url": "u-missing", "embedding": "[0.9]"}],
+        "policy_events": [{"url": "u2", "embedding": "[0.2]"}],
+    }
+    mention_result = {"restored": 1, "already_present": 0, "not_found": 1}
+    policy_result = {"restored": 1, "already_present": 0, "not_found": 0}
+    with patch("db.restore_mention_embeddings_by_url", return_value=mention_result) as mock_mention, \
+         patch("db.restore_policy_event_embeddings_by_url", return_value=policy_result) as mock_policy, \
+         patch.object(vectorizer, "sync_vector_index", return_value={"mentions": 1, "policy_events": 1}) as mock_sync:
+        result = vectorizer.import_vector_backup(backup)
+
+    mock_mention.assert_called_once_with(backup["mentions"])
+    mock_policy.assert_called_once_with(backup["policy_events"])
+    mock_sync.assert_called_once()
+    assert result == {
+        "mentions_restored": 1, "mentions_already_present": 0, "mentions_not_found": 1,
+        "policy_restored": 1, "policy_already_present": 0, "policy_not_found": 0,
+        "index_synced": {"mentions": 1, "policy_events": 1},
+    }
 
 
 def test_search_similar_mentions_returns_empty_list_when_embedding_fails():

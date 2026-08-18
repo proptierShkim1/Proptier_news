@@ -583,6 +583,59 @@ def get_policy_events_without_embedding(limit: int = 200) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def get_mention_embeddings_for_backup() -> list[dict]:
+    """벡터 색인 백업용 — url(고유키)과 embedding(JSON)만 뽑는다. url을 키로 쓰는 이유는
+    DB 복구 후 id가 원래와 달라질 수 있어도 url은 유지되기 때문."""
+    init_db()
+    with _connect() as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT url, embedding FROM mentions WHERE embedding != ''"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_policy_event_embeddings_for_backup() -> list[dict]:
+    init_db()
+    with _connect() as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT url, embedding FROM policy_events WHERE embedding != ''"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def _restore_embeddings_by_url(con: sqlite3.Connection, table: str, rows: list[dict]) -> dict:
+    """rows의 각 {url, embedding}을 table에 되돌린다. 커넥션 하나로 전부 처리해 수천 건짜리
+    백업 복구도 빠르게 끝나게 한다. 이미 값이 있으면 덮어쓰지 않고(already_present),
+    url 자체가 현재 DB에 없으면(not_found) 구분해서 세어 — 관리자가 "정말 못 살린 건수"와
+    "이미 멀쩡해서 손 안 댄 건수"를 헷갈리지 않게 한다."""
+    restored = already_present = not_found = 0
+    for row in rows:
+        cur = con.execute(
+            f"UPDATE {table} SET embedding = :embedding WHERE url = :url AND embedding = ''", row,
+        )
+        if cur.rowcount > 0:
+            restored += 1
+        elif con.execute(f"SELECT 1 FROM {table} WHERE url = ?", [row["url"]]).fetchone():
+            already_present += 1
+        else:
+            not_found += 1
+    return {"restored": restored, "already_present": already_present, "not_found": not_found}
+
+
+def restore_mention_embeddings_by_url(rows: list[dict]) -> dict:
+    init_db()
+    with _connect() as con:
+        return _restore_embeddings_by_url(con, "mentions", rows)
+
+
+def restore_policy_event_embeddings_by_url(rows: list[dict]) -> dict:
+    init_db()
+    with _connect() as con:
+        return _restore_embeddings_by_url(con, "policy_events", rows)
+
+
 def count_mentions_without_embedding() -> int:
     init_db()
     with _connect() as con:
@@ -764,6 +817,22 @@ def upsert_policy_vector(event_id: int, embedding: list[float]) -> None:
     init_db()
     with _connect() as con:
         _upsert_vector(con, "policy_vectors", event_id, embedding)
+
+
+def upsert_mention_vectors_batch(items: list[tuple[int, list[float]]]) -> None:
+    """건마다 새 커넥션을 여는 upsert_mention_vector와 달리 커넥션 하나로 전부 처리한다 —
+    색인 전체를 새로 채워야 하는 복구 시나리오(수천 건)에서 필수적인 속도 차이."""
+    init_db()
+    with _connect() as con:
+        for rowid, embedding in items:
+            _upsert_vector(con, "mention_vectors", rowid, embedding)
+
+
+def upsert_policy_vectors_batch(items: list[tuple[int, list[float]]]) -> None:
+    init_db()
+    with _connect() as con:
+        for rowid, embedding in items:
+            _upsert_vector(con, "policy_vectors", rowid, embedding)
 
 
 def search_mention_vectors(query_embedding: list[float], top_k: int = 5) -> list[dict]:
