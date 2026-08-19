@@ -156,18 +156,6 @@ def _sftp_upload_dir(sftp, local_dir: Path, remote_dir: str, log, skip_names: se
             log(f"↑ {item.relative_to(ROOT)}")
 
 
-def _stop_streamlit(ssh, log):
-    """배포 시작 전에 실행 중인 서버부터 죽인다 — 이전엔 코드 업로드/pip install을
-    기존 프로세스가 떠 있는 채로 진행했는데, 그러면 그 프로세스가 이미 메모리에 적재한
-    pandas/pyarrow 같은 공유 라이브러리 파일을 pip install이 그 자리에서 갈아치우면서
-    세그폴트를 유발하고, 하필 그 순간이 SQLite 쓰기 중이라 news.db가 반복 손상된
-    사고(2026-08-14~19)로 이어졌다. 파일을 건드리기 전에 프로세스를 확실히 내려서
-    이 위험을 원천 차단한다."""
-    cmd = f"pkill -9 -f 'streamlit run app.py --server.port {_DEPLOY_APP_PORT}' 2>/dev/null; sleep 1; true"
-    _ssh_run(ssh, cmd, timeout=15)
-    log("🛑 기존 서버 프로세스 정지")
-
-
 def _start_streamlit(ssh, log):
     script = f"{_DEPLOY_REMOTE}/scripts/start_server.sh"
     cmd = (
@@ -199,9 +187,6 @@ def _deploy():
 
         out, _, _ = _ssh_run(ssh, f"test -d {_DEPLOY_REMOTE}/venv && echo YES || echo NO")
         first_deploy = out.strip() != "YES"
-
-        if not first_deploy:
-            _stop_streamlit(ssh, log)
 
         sftp = ssh.open_sftp()
         _ssh_run(ssh, f"mkdir -p {_DEPLOY_REMOTE}")
