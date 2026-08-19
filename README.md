@@ -9,12 +9,12 @@
 |---|---|
 | 📰 오늘의 뉴스 | hero 배너, 지표 카드, 경영진 브리핑, 시간대별 분포 차트, 카테고리 탭별 랭킹 뉴스 |
 | 🏢 부동산사 동향 | 기간(누적전체/1년/1개월/1주)·부동산사별 이슈 타임라인 및 이력 |
-| 📝 브리핑 | 날짜별 아침 브리핑 아카이브 |
+| 📝 브리핑 | 날짜별 아침 브리핑 아카이브 — 확정된 과거 날짜는 채널 표시 설정이 나중에 바뀌어도 내용이 변하지 않는다 |
 | 🔍 뉴스 검색 | 키워드·기간·부동산사 필터링 검색 |
 | 📄 PDF 보고서 | 표지 + 랭킹 1~5위 카드뉴스 형태(1080×1080, 6페이지) — 실제 다운로드 가능한 PDF 생성 |
 | 🏛️ 정책 뉴스 | 정부 정책 보도자료 전용 화면 — hero/지표, 경영진 브리핑, 발표 추이 차트, 카테고리 탭별 점수 랭킹 |
-| 🤖 AI AGENT | Gemini 기반 자유 대화형 챗봇(`st.chat_input`) — 수집 데이터(뉴스·정책)를 벡터 검색으로 찾아 답변에 근거로 사용, 근거가 부족하면 opt-in 웹 검색 답변 버튼 제공 |
-| ⚙️ 설정 (관리자 전용) | 접근 제어(IP 화이트리스트) · 데이터 수집 · 데이터 관리 · 벡터 데이터 · 로그 · 서버 배포 |
+| 🤖 AI AGENT | Gemini 기반 자유 대화형 챗봇(`st.chat_input`) — 수집 데이터(뉴스·정책)를 벡터 검색으로 찾아 답변에 근거로 사용, 지표 성격 질문(건수·비용·순위 등)은 16개 함수 호출 도구로 직접 집계해 답변, 근거가 부족하면 opt-in Hybrid Search(웹 검색) 버튼 제공 |
+| ⚙️ 설정 (관리자 전용) | 접근 제어(IP 화이트리스트) · 데이터 수집 · 데이터 관리 · 벡터 데이터(백업/복구 포함) · API 사용량 · 로그 · 서버 배포 |
 
 메뉴 순서: 오늘의 뉴스 → 부동산사 동향 → 브리핑 → 정책 뉴스 → 뉴스 검색 → PDF 보고서 → AI AGENT
 → (관리자만) 설정.
@@ -77,6 +77,23 @@
   통계·조사/조직·인사/행사·홍보)를 분류하고 최신성·조회수 기반 점수/메달을 매겨, `news_today.py`와
   동일한 패턴(Executive Brief·발표 추이 차트·카테고리 탭·점수 랭킹 카드)으로 `views/policy_news.py`에서
   렌더링한다
+
+## 브리핑 아카이빙
+
+설정 → 데이터 관리의 "🔎 화면 표시 채널" 토글은 다른 5개 화면(오늘의 뉴스 등)에는 실시간으로
+적용되지만, **한 번 확정된 과거 브리핑에는 소급 적용되지 않는다** — 예전엔 토글을 바꾸면
+이미 봤던 지난 브리핑의 채널별 수집 현황·주요 뉴스까지 그때그때 다시 계산돼 바뀌었는데, "그날
+실제로 무슨 일이 있었는지"를 나중에 되짚어보는 아카이브 용도로는 부적절한 동작이었다.
+
+- `news_feed.archive_pending_briefings()`가 스케줄러 tick마다 "데이터는 있지만 아직 확정 안
+  된" 과거 날짜(오늘 제외)를 찾아 `db.briefing_archives` 테이블에 그날의 채널별 수집
+  현황·채널별 주요 뉴스·자사/경쟁사/시장 동향을 표시용 필드 그대로 복사해 저장한다. 확정된
+  이후로는 원본 `mentions`가 삭제되거나 채널 표시 설정이 바뀌어도 그 내용이 변하지 않는다.
+  대상 날짜는 `db.get_distinct_mention_dates()`(실제 데이터가 있는 날짜만, gap-date는
+  걸러냄)로 좁혀서 매 tick마다 전체 `mentions`를 훑지 않는다.
+  오늘 날짜는 아직 확정 전이라 `views/briefings.py`가 `get_mentions_by_collected_date`로
+  그 시점까지의 데이터를 즉석에서 계산해 미리보기로 보여준다(채널 표시 필터와 무관하게
+  전체 채널·건수 제한 없이, 다음날 확정될 내용과 정확히 같은 기준).
 
 ## 접근 제어
 
@@ -163,14 +180,24 @@ summarizer.py와 같은 `.env`의 `GEMINI_API_KEYS`/`GEMINI_MODEL`을 재사용�
   방식이라, 서로 다른 사용자가 거의 동시에 채팅하면 락 없이는 한쪽의 저장이 다른 쪽 걸 덮어써
   유실될 수 있었다.** 프로세스 전역 `threading.Lock()`으로 읽기~쓰기 구간 전체를 감싸 직렬화해
   해결했다.
-- **사내 데이터로 답하기 어려운 질문은 opt-in 하이브리드(웹 검색) 답변을 추가로 제공한다.**
+- **사내 데이터로 답하기 어려운 질문은 opt-in Hybrid Search(웹 검색) 답변을 추가로 제공한다.**
   벡터 검색 결과 중 가장 가까운(distance가 가장 작은) 항목이 임계값(`agent_chat._INSUFFICIENT_DISTANCE_THRESHOLD=0.83`,
   실제 관련/무관 질문 여러 개로 실측해 정함 — 관련 질문은 0.69~0.80대, 무관한 질문은 0.85~0.91대에
   몰려 있었다)보다 크면 `agent_chat.is_grounding_sufficient()`가 False를 반환한다. 이때도 기존처럼
-  즉시 일반 지식으로 답하되(대화가 끊기지 않음), 그 답변 아래에 "🌐 웹 검색으로 다시 답변받기" 버튼을
+  즉시 일반 지식으로 답하되(대화가 끊기지 않음), 그 답변 아래에 "🌐 Hybrid Search 실행" 버튼을
   추가로 보여준다. 사용자가 누르면 `agent_chat.ask_with_web_search()`가 Gemini의 구글 검색 그라운딩
   도구(`types.Tool(google_search=types.GoogleSearch())`)로 같은 질문을 다시 물어 새 답변을 대화에
   이어붙인다 — 사내 데이터가 없어 애매한 답만 받고 이탈하는 걸 막기 위한 opt-in 기능.
+- **지표 성격 질문은 함수 호출(automatic function calling)로 직접 집계해 답한다.**
+  `agent_chat._STATS_TOOLS`에 16개 순수 함수(채널별 건수, 브랜드 언급 비교, API 비용, 벡터화
+  진행률, 수집 상태, 정책 카테고리/순위 등)를 그대로 등록해두면 google-genai SDK가 시그니처와
+  독스트링만으로 스키마를 만들고, 모델이 필요하다고 판단할 때 알아서 호출·재질의한다 — 별도 라우팅
+  코드 없이 벡터 검색(문서 그라운딩)과 지표 조회(정확한 집계)를 한 대화 안에서 함께 쓸 수 있다.
+  이 16개 도구가 부르는 `db.py` 조회는 `cached_db.py`에 60초 TTL로 캐싱해 여러 사용자가 비슷한
+  질문을 해도 DB 재조회를 줄인다. 또한 "몇 건", "API 비용", "벡터화 현황" 같은 키워드로 명백한
+  지표 질문임을 판별하면(`agent_chat.looks_like_stats_only_question`) 벡터 검색(임베딩 API 호출
+  2회)을 아예 건너뛴다 — 동시 사용자가 늘어날수록 Gemini API 키 풀에 걸리는 부담을 줄이기 위함
+  (애매하면 항상 그라운딩을 시도해 근거 누락을 우선 방지).
 
 ## 성능 · 동시 접속
 
@@ -222,6 +249,41 @@ summarizer.py와 같은 `.env`의 `GEMINI_API_KEYS`/`GEMINI_MODEL`을 재사용�
 시점에 캐시를 비우는 것(감지 훅이 필요해 복잡도 대비 이득이 적다고 판단, 60초면 자연히
 해소됨), 뉴스 검색/부동산사 동향 검색어 입력의 debounce.
 
+## DB 안정성 · 자동 백업/복구
+
+2026-08-14~19에 원인이 제각각인(pandas/pyarrow 버전 조합의 세그폴트, 다른 프로세스의
+OOM-kill, 배포 스크립트가 자기 자신의 서버 프로세스를 죽인 회귀, WAL 재생 타이밍 등)
+`news.db` 손상이 반복됐다. 원인 하나하나를 찾아 막는 접근은 이 서버(가상화 환경, 다른
+앱들과 리소스를 공유) 조건에서 한계가 있어서, **손상 자체를 막는 대신 손상돼도 사람
+개입 없이 몇 분 안에 스스로 복구되는 안전망**으로 방향을 바꿨다.
+
+- **크래시 내구성**: `db._connect()`가 매 연결마다 `PRAGMA synchronous=FULL`을 설정한다
+  (journal_mode와 달리 synchronous는 DB 파일에 영구 저장되지 않아 매번 다시 설정해야
+  함). 매 커밋을 확실히 디스크에 fsync해 프로세스가 쓰기 도중 죽어도 손상 가능성을
+  줄인다.
+- **자동 백업**: `scheduler.py`의 `_tick_db_backup`이 20분마다 `db.backup_database()`
+  (SQLite 온라인 백업 API — 다른 커넥션이 쓰기 중이어도 안전하게 스냅샷을 뜬다)를
+  호출해 `data/db_backups/`에 저장하고, 최근 12개만 남기고 정리한다.
+- **자동 무결성 검사 + 복구**: `_tick_db_health_check`가 10분마다 `db.is_healthy()`
+  (`init_db()`를 거치지 않는 순수 읽기 전용 `PRAGMA integrity_check` — 손상된 파일에
+  마이그레이션을 시도하다 추가 문제를 일으키지 않기 위함)로 확인하고, 실패하면
+  `db.restore_latest_backup()`이 가장 최근 백업으로 즉시 교체한다(손상 파일은
+  `news.db.autofailed-*`로 타임스탬프를 붙여 보존, 사후 분석 가능). 이 앱은 매 요청마다
+  `db._connect()`로 새 커넥션을 열기 때문에 파일만 원상복구하면 프로세스 재시작 없이
+  바로 다음 요청부터 정상 파일을 쓴다.
+- **배포 시 로컬 파일이 서버 걸 덮어쓰지 않도록**: `views/settings.py`의
+  `_DATA_UPLOAD_SKIP`이 `.gitignore`의 `data/` 항목과 동일한 목록(설정 파일들,
+  `vector_backups/`, `db_backups/` 등)을 배포 업로드에서 제외한다 — 예전엔 `news.db`만
+  제외해서, 로컬에서 테스트하며 쌓인 `scheduler.log`/백업 파일이 배포 때마다 서버 것을
+  덮어쓰고 있었다.
+- **측정된 비용**: 무결성 검사 0.14초, 백업 0.66초(DB 283MB 기준) — 사용자 수와 무관하게
+  파일 크기에만 비례하는 작업이라 동시 접속이 늘어도 부담이 커지지 않는다. 디스크는
+  백업 12개 × DB 크기만큼 쓴다(현재 기준 약 3.4GB).
+- **정직한 한계**: 이건 손상 "원인"을 없애는 게 아니라 "피해"를 최소화하는 것이다 —
+  가장 최근 백업 시점 이후의 데이터(최대 20분치)는 사고마다 유실될 수 있다. 근본
+  원인이 인프라(가상화 디스크의 fsync 신뢰성) 레벨일 가능성이 있어 애플리케이션
+  코드만으로는 완전히 해결하지 못한다.
+
 ## 벡터 데이터 · 접속 로그 (설정 → 벡터 데이터 / 로그)
 
 - **벡터 데이터**: `vectorizer.py`가 Gemini 임베딩 모델(`gemini-embedding-001`, 3072차원)로
@@ -253,6 +315,16 @@ summarizer.py와 같은 `.env`의 `GEMINI_API_KEYS`/`GEMINI_MODEL`을 재사용�
   쓸 수 있게 한다. vec0는 rowid 충돌에 `INSERT OR REPLACE`를 지원하지 않아 upsert는
   DELETE 후 INSERT로 처리한다(`db._upsert_vector`). rowid를 `mentions.id`/`policy_events.id`와
   그대로 맞춰서 JOIN으로 원본 행을 바로 가져온다.
+- **벡터 임베딩 백업/복구** (설정 → 벡터 데이터 탭 하단): `mention_vectors`/`policy_vectors`(vec0
+  색인)는 `mentions.embedding`/`policy_events.embedding`(JSON 원본)으로부터 언제든 재생성
+  가능한 파생 데이터라 백업 대상에서 빼고, url을 키로 삼은 embedding 값만 JSON 파일로
+  내보낸다(`vectorizer.export_vector_backup`) — id가 아니라 url을 키로 쓰는 이유는 DB 복구
+  후 id가 바뀌어도 url은 유지되기 때문. 복구 시엔 url이 일치하고 아직 embedding이 비어있는
+  행에만 채워 넣고(이미 값이 있으면 덮어쓰지 않음) `vectorizer.sync_vector_index()`로 색인도
+  함께 채운다 — DB 손상 등으로 색인이 날아갔을 때 Gemini 임베딩 API를 다시 호출하지 않고도
+  되돌릴 수 있다. 복구 버튼을 누르면 `st.status()`로 뉴스 복구 → 정책 복구 → 색인 재생성
+  단계가 실시간으로 표시된다. 건마다 새 커넥션을 여는 대신 커넥션 하나로 전체를 처리해
+  수천 건 규모도 몇 초 안에 끝난다.
 - **접속 로그**: `db.activity_log` 테이블에 접속 IP·화면·행위·상세내용을 남긴다. 페이지
   방문(전체 화면 공통, `app.py`), 뉴스 검색(검색어), AI 채팅 전송, PDF 생성, 관리자 작업
   (수집 실행/데이터 삭제/벡터화 실행)을 기록한다. 페이지 방문·검색은 Streamlit이 위젯
@@ -303,15 +375,15 @@ summarizer.py       PDF 상위 5건 전용 Gemini 기사 요약 (원문 있는 �
 agent_chat.py       AI AGENT 페이지용 범용 Gemini 대화 (매 메시지마다 새 세션에 이력 주입 + 벡터 검색 근거 주입)
 vectorizer.py       mentions/policy_events Gemini 임베딩 벡터화(+sqlite-vec 색인) · 백그라운드 실행/이력 · 유사도 검색
 access_control.py    IP 화이트리스트 · 관리자 판별
-db.py               수집 데이터 SQLite 저장소 (WAL 모드 + sqlite-vec 확장) + 벡터 색인/접속 로그 테이블
+db.py               수집 데이터 SQLite 저장소 (WAL 모드 + synchronous=FULL + sqlite-vec 확장) + 벡터 색인/접속 로그 테이블 + 자동 백업·무결성검사·복구
 cached_db.py        db.py 조회를 60초 TTL로 캐싱 (동시 접속·반복 상호작용 시 중복 조회 방지)
 report_pdf.py        PDF 보고서 카드덱 HTML 템플릿 + Playwright PDF 생성 (미리보기와 공유)
 collector.py         키워드×채널 수집 조율, 노이즈 필터링, 일회성 백필(run_backfill)
-scheduler.py         자동 수집 스케줄러(백그라운드 스레드, 신규/정책/네이버뉴스 + PDF 요약 미리 생성)
+scheduler.py         자동 수집 스케줄러(백그라운드 스레드, 신규/정책/네이버뉴스/매경 + PDF 요약 미리 생성 + 벡터화 + DB 자동 백업/무결성검사)
 utils.py             키워드/스케줄/채널 표시 설정 로드·저장, 상대 날짜 변환
 crawlers/            네이버·구글·다음·디시인사이드 스크래퍼 + 네이버뉴스API·매경API(공식 API) + 정책 7개 기관
 views/               페이지별 렌더 함수 (news_today, firms, briefings, search, report, policy_news, agent, settings)
-data/                런타임 설정·DB (access_config.json, keywords.json, news.db 등 — git 미포함)
+data/                런타임 설정·DB (access_config.json, keywords.json, news.db, db_backups/, vector_backups/ 등 — git 미포함)
 scripts/start_server.sh  원격 서버 기동 스크립트
 ```
 
