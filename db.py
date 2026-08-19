@@ -3,6 +3,7 @@ hana_p — SQLite 저장소 (수집 데이터 + 실행 이력)
 """
 
 import json
+import shutil
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +12,19 @@ import sqlite_vec
 
 DB_PATH = Path(__file__).resolve().parent / "data" / "news.db"
 VECTOR_DIM = 3072  # gemini-embedding-001 출력 차원
+
+# 2026-08-14~19에 원인이 제각각인(pandas 세그폴트/OOM-kill/배포 재시작 타이밍 등)
+# DB 손상이 반복됐음 — 매번 사람이 sqlite3 .recover로 몇 시간씩 포렌식 복구를 했는데,
+# 그 과정 자체도(컬럼 매핑 오류 등) 새 문제를 만들 수 있어 위험하다. 손상 원인 하나하나를
+# 다 막는 대신, 정기 백업 + 무결성 검사 + 자동 복구로 "깨져도 몇 분 안에 스스로 되돌아오는"
+# 쪽으로 방향을 바꾼다.
+_BACKUP_KEEP = 12
+
+
+def _backup_dir() -> Path:
+    # 함수로 두는 이유: DB_PATH가 테스트에서 monkeypatch되므로, 모듈 로드 시점에 한 번
+    # 계산해 고정하면 테스트 격리가 깨진다 — 호출할 때마다 현재 DB_PATH 기준으로 다시 구한다.
+    return DB_PATH.parent / "db_backups"
 
 
 def _connect() -> sqlite3.Connection:
@@ -1033,3 +1047,64 @@ def get_distinct_mention_dates() -> set[str]:
             r[0] for r in con.execute("SELECT DISTINCT date(collected_at) FROM mentions").fetchall()
             if r[0] is not None
         }
+
+
+def backup_database() -> Path:
+    """SQLite 온라인 백업 API로 스냅샷을 뜬다 — 파일을 그냥 복사하는 것과 달리 다른
+    커넥션이 쓰기 중이어도 일관된 상태로 안전하게 복사된다(WAL 체크포인트를 알아서
+    처리). 오래된 백업은 최근 _BACKUP_KEEP개만 남기고 정리한다."""
+    init_db()
+    backup_dir = _backup_dir()
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    # 초 단위까지만 쓰면 짧은 시간 안에 연달아 호출될 때(수동+예약 겹침 등) 파일명이
+    # 충돌해 이전 백업을 덮어써 버린다 — 마이크로초까지 넣어 항상 유일하게 만든다.
+    dest_path = backup_dir / f"news_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.db"
+    src = sqlite3.connect(DB_PATH)
+    dst = sqlite3.connect(dest_path)
+    try:
+        src.backup(dst)
+    finally:
+        src.close()
+        dst.close()
+
+    backups = sorted(backup_dir.glob("news_*.db"), reverse=True)
+    for old in backups[_BACKUP_KEEP:]:
+        old.unlink()
+    return dest_path
+
+
+def is_healthy() -> bool:
+    """news.db가 정상적으로 열리고 무결성 검사를 통과하는지 확인한다. init_db()를
+    거치지 않는 순수 읽기 전용 점검이다 — 손상된 파일에 CREATE TABLE/ALTER TABLE
+    마이그레이션을 시도하다 추가 문제를 일으키지 않기 위함."""
+    try:
+        con = sqlite3.connect(DB_PATH, timeout=10.0)
+        try:
+            result = con.execute("PRAGMA integrity_check").fetchall()
+        finally:
+            con.close()
+        return result == [("ok",)]
+    except sqlite3.Error:
+        return False
+
+
+def restore_latest_backup() -> Path | None:
+    """가장 최근 백업으로 현재 DB를 되돌린다. 손상된 파일은 지우지 않고 타임스탬프를
+    붙여 보존한다(사후 분석·포렌식 복구 가능성을 남겨둠). 백업이 하나도 없으면 아무
+    것도 하지 않고 None을 반환한다."""
+    backup_dir = _backup_dir()
+    backups = sorted(backup_dir.glob("news_*.db"), reverse=True) if backup_dir.exists() else []
+    if not backups:
+        return None
+    latest = backups[0]
+
+    if DB_PATH.exists():
+        failed_path = DB_PATH.parent / f"news.db.autofailed-{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        DB_PATH.rename(failed_path)
+    for suffix in ("-wal", "-shm"):
+        sidecar = DB_PATH.parent / f"news.db{suffix}"
+        if sidecar.exists():
+            sidecar.unlink()
+
+    shutil.copy2(latest, DB_PATH)
+    return latest

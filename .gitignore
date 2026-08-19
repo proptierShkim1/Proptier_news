@@ -17,3 +17,4 @@ data/agent_chat_history.json
 data/deploy_log.jsonl
 data/scheduler.log
 data/vector_backups/
+data/db_backups/

@@ -1,3 +1,5 @@
+import gc
+import sqlite3
 from datetime import datetime, timedelta
 
 import db
@@ -879,3 +881,84 @@ def test_get_api_usage_daily_groups_by_date(tmp_path, monkeypatch):
     assert len(daily) == 1
     assert daily[0]["calls"] == 2
     assert daily[0]["tokens"] == 30
+
+
+def test_backup_database_creates_restorable_snapshot(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1"))
+
+    backup_path = db.backup_database()
+
+    assert backup_path.exists()
+    con = sqlite3.connect(backup_path)
+    assert con.execute("SELECT COUNT(*) FROM mentions").fetchone()[0] == 1
+    con.close()
+
+
+def test_backup_database_keeps_only_recent_n_backups(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(db, "_BACKUP_KEEP", 2)
+    db.insert_mention(_mention(url="https://x/1"))
+
+    paths = [db.backup_database() for _ in range(4)]
+
+    remaining = list((tmp_path / "db_backups").glob("news_*.db"))
+    assert len(remaining) == 2
+    # 가장 최근 2개는 남아있어야 한다
+    for p in paths[-2:]:
+        assert p.exists()
+
+
+def test_is_healthy_true_for_normal_database(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1"))
+
+    assert db.is_healthy() is True
+
+
+def _truncate_in_half(path):
+    """페이지 상당수를 통째로 잘라내 sqlite3가 확실히 손상으로 인식하게 만든다 —
+    헤더 근처 바이트 몇 개만 건드리는 건 SQLite가 의외로 잘 버텨서 재현이 안 된다.
+    Windows에서는 db.py의 커넥션이 명시적으로 close()되지 않고 GC에 의존하는데,
+    바로 직전까지 많은 insert가 있었으면 아직 안 닫힌 핸들 때문에 rename/truncate가
+    막힐 수 있어 gc.collect()로 정리한다(Linux 프로덕션에서는 발생하지 않는, 테스트
+    환경 한정 이슈)."""
+    gc.collect()
+    size = path.stat().st_size
+    with open(path, "r+b") as f:
+        f.truncate(size // 2)
+
+
+def test_is_healthy_false_for_corrupted_file(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    for i in range(200):
+        db.insert_mention(_mention(url=f"https://x/{i}"))
+    _truncate_in_half(db.DB_PATH)
+
+    assert db.is_healthy() is False
+
+
+def test_restore_latest_backup_returns_none_when_no_backups_exist(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+
+    assert db.restore_latest_backup() is None
+
+
+def test_restore_latest_backup_replaces_corrupted_db_and_preserves_it(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1"))
+    db.backup_database()
+    for i in range(2, 52):
+        db.insert_mention(_mention(url=f"https://x/{i}"))  # 백업 이후 추가된 건 - 복구하면 사라짐
+
+    _truncate_in_half(db.DB_PATH)
+    assert db.is_healthy() is False
+
+    gc.collect()
+    restored_from = db.restore_latest_backup()
+
+    assert restored_from is not None
+    assert db.is_healthy() is True
+    assert db.count_mentions() == 1
+    failed_copies = list(tmp_path.glob("news.db.autofailed-*"))
+    assert len(failed_copies) == 1

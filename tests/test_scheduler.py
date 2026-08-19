@@ -57,6 +57,8 @@ def _reset(monkeypatch):
     monkeypatch.setattr(scheduler, "_tick_pdf_presummary", lambda: None)
     monkeypatch.setattr(scheduler, "_tick_auto_vectorize", lambda: None)
     monkeypatch.setattr(scheduler, "_tick_archive_briefings", lambda: None)
+    monkeypatch.setattr(scheduler, "_tick_db_backup", lambda: None)
+    monkeypatch.setattr(scheduler, "_tick_db_health_check", lambda: None)
 
 
 def test_tick_new_posts_and_policy_fire_on_their_own_independent_schedules(monkeypatch):
@@ -431,6 +433,126 @@ def test_tick_auto_vectorize_swallows_exception(monkeypatch, caplog):
     assert any("오류" in record.message for record in caplog.records)
 
 
+def test_tick_db_backup_runs_immediately_on_first_call(monkeypatch):
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+    calls = []
+    monkeypatch.setattr(scheduler.db, "backup_database", lambda: calls.append(1))
+
+    scheduler._tick_db_backup()
+
+    assert calls == [1]
+    assert scheduler._last_db_backup == datetime(2026, 7, 16, 9, 0)
+
+
+def test_tick_db_backup_does_not_run_again_before_interval_elapses(monkeypatch):
+    monkeypatch.setattr(scheduler, "_last_db_backup", datetime(2026, 7, 16, 9, 0))
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 5))
+    calls = []
+    monkeypatch.setattr(scheduler.db, "backup_database", lambda: calls.append(1))
+
+    scheduler._tick_db_backup()
+
+    assert calls == []
+
+
+def test_tick_db_backup_runs_again_after_interval_elapses(monkeypatch):
+    monkeypatch.setattr(
+        scheduler, "_last_db_backup",
+        datetime(2026, 7, 16, 9, 0) - timedelta(minutes=scheduler._DB_BACKUP_INTERVAL_MINUTES),
+    )
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+    calls = []
+    monkeypatch.setattr(scheduler.db, "backup_database", lambda: calls.append(1))
+
+    scheduler._tick_db_backup()
+
+    assert calls == [1]
+
+
+def test_tick_db_backup_swallows_exception(monkeypatch, caplog):
+    monkeypatch.setattr(scheduler, "_last_db_backup", None)
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+
+    def boom():
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(scheduler.db, "backup_database", boom)
+
+    with caplog.at_level("ERROR", logger="hana_p.scheduler"):
+        scheduler._tick_db_backup()
+
+    assert any("오류" in record.message for record in caplog.records)
+
+
+def test_tick_db_health_check_does_nothing_when_healthy(monkeypatch):
+    monkeypatch.setattr(scheduler, "_last_db_health_check", None)
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+    monkeypatch.setattr(scheduler.db, "is_healthy", lambda: True)
+    restore_calls = []
+    monkeypatch.setattr(scheduler.db, "restore_latest_backup", lambda: restore_calls.append(1))
+
+    scheduler._tick_db_health_check()
+
+    assert restore_calls == []
+    assert scheduler._last_db_health_check == datetime(2026, 7, 16, 9, 0)
+
+
+def test_tick_db_health_check_does_not_run_again_before_interval_elapses(monkeypatch):
+    monkeypatch.setattr(scheduler, "_last_db_health_check", datetime(2026, 7, 16, 9, 0))
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 5))
+    calls = []
+    monkeypatch.setattr(scheduler.db, "is_healthy", lambda: calls.append(1) or True)
+
+    scheduler._tick_db_health_check()
+
+    assert calls == []
+
+
+def test_tick_db_health_check_restores_latest_backup_when_unhealthy(monkeypatch, caplog):
+    monkeypatch.setattr(scheduler, "_last_db_health_check", None)
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+    monkeypatch.setattr(scheduler.db, "is_healthy", lambda: False)
+    restore_calls = []
+
+    class FakePath:
+        name = "news_20260716_0800.db"
+
+    monkeypatch.setattr(scheduler.db, "restore_latest_backup", lambda: restore_calls.append(1) or FakePath())
+
+    with caplog.at_level("ERROR", logger="hana_p.scheduler"):
+        scheduler._tick_db_health_check()
+
+    assert restore_calls == [1]
+    assert any("자동 복구 완료" in record.message for record in caplog.records)
+
+
+def test_tick_db_health_check_logs_failure_when_no_backup_available(monkeypatch, caplog):
+    monkeypatch.setattr(scheduler, "_last_db_health_check", None)
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+    monkeypatch.setattr(scheduler.db, "is_healthy", lambda: False)
+    monkeypatch.setattr(scheduler.db, "restore_latest_backup", lambda: None)
+
+    with caplog.at_level("ERROR", logger="hana_p.scheduler"):
+        scheduler._tick_db_health_check()
+
+    assert any("자동 복구 실패" in record.message for record in caplog.records)
+
+
+def test_tick_db_health_check_swallows_exception(monkeypatch, caplog):
+    monkeypatch.setattr(scheduler, "_last_db_health_check", None)
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
+
+    def boom():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(scheduler.db, "is_healthy", boom)
+
+    with caplog.at_level("ERROR", logger="hana_p.scheduler"):
+        scheduler._tick_db_health_check()
+
+    assert any("오류" in record.message for record in caplog.records)
+
+
 def test_tick_archive_briefings_calls_archive_pending_briefings(monkeypatch):
     calls = []
     monkeypatch.setattr(
@@ -463,6 +585,8 @@ def test_tick_includes_archive_briefings_when_not_disabled(monkeypatch):
     monkeypatch.setattr(scheduler, "load_mk_news_collection_schedule", lambda: {"times": []})
     monkeypatch.setattr(scheduler, "_tick_pdf_presummary", lambda: None)
     monkeypatch.setattr(scheduler, "_tick_auto_vectorize", lambda: None)
+    monkeypatch.setattr(scheduler, "_tick_db_backup", lambda: None)
+    monkeypatch.setattr(scheduler, "_tick_db_health_check", lambda: None)
     calls = []
     monkeypatch.setattr(scheduler.news_feed, "archive_pending_briefings", lambda: calls.append(1) or [])
 

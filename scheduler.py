@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import collector
+import db
 import news_feed
 import summarizer
 import vectorizer
@@ -27,7 +28,14 @@ _POLL_SECONDS = 30
 _POLICY_COLLECTION_DAYS = 3
 # PDF 상위 항목 AI 요약 미리 생성 주기 — 수집 스케줄과는 무관하게 별도로 돈다.
 _PDF_PRESUMMARY_INTERVAL_MINUTES = 5
+# 2026-08-14~19에 원인이 제각각인 DB 손상이 반복됐다(pandas 세그폴트/OOM-kill/배포
+# 재시작 타이밍/fsync 등) — 원인 하나하나를 막는 대신, 정기 백업 + 무결성 검사로
+# "깨져도 사람 개입 없이 몇 분 안에 스스로 되돌아오는" 안전망을 둔다.
+_DB_BACKUP_INTERVAL_MINUTES = 20
+_DB_HEALTH_CHECK_INTERVAL_MINUTES = 10
 _last_pdf_presummary: datetime | None = None
+_last_db_backup: datetime | None = None
+_last_db_health_check: datetime | None = None
 _lock = threading.Lock()
 _started = False
 
@@ -202,6 +210,52 @@ def _tick_auto_vectorize() -> None:
         logger.exception("스케줄러(벡터화) 반복 실행 중 오류 발생")
 
 
+def _tick_db_backup() -> None:
+    """news.db 전체를 주기적으로 안전하게(SQLite 온라인 백업 API) 스냅샷 떠 둔다 —
+    손상 시 사람이 sqlite3 .recover로 몇 시간씩 포렌식 복구하는 대신, 이 백업으로
+    빠르게 되돌리기 위함."""
+    global _last_db_backup
+    try:
+        now = datetime.now()
+        with _lock:
+            due = _last_db_backup is None or (
+                now - _last_db_backup >= timedelta(minutes=_DB_BACKUP_INTERVAL_MINUTES)
+            )
+        if due:
+            with _lock:
+                _last_db_backup = now
+            db.backup_database()
+    except Exception:
+        logger.exception("스케줄러(DB 백업) 반복 실행 중 오류 발생")
+
+
+def _tick_db_health_check() -> None:
+    """news.db 무결성을 주기적으로 확인하고, 손상이 감지되면 가장 최근 백업으로 즉시
+    자동 복구한다. 이 앱은 매 요청마다 db._connect()로 새 커넥션을 열기 때문에,
+    파일만 원상복구하면 스케줄러/웹 요청 모두 재시작 없이 바로 정상 파일을 쓰게 된다."""
+    global _last_db_health_check
+    try:
+        now = datetime.now()
+        with _lock:
+            due = _last_db_health_check is None or (
+                now - _last_db_health_check >= timedelta(minutes=_DB_HEALTH_CHECK_INTERVAL_MINUTES)
+            )
+        if not due:
+            return
+        with _lock:
+            _last_db_health_check = now
+        if db.is_healthy():
+            return
+        logger.error("news.db 무결성 검사 실패 — 최근 백업으로 자동 복구를 시도합니다")
+        restored_from = db.restore_latest_backup()
+        if restored_from:
+            logger.error("news.db 자동 복구 완료 (백업: %s)", restored_from.name)
+        else:
+            logger.error("news.db 자동 복구 실패 — 사용 가능한 백업이 없습니다")
+    except Exception:
+        logger.exception("스케줄러(DB 무결성 검사) 반복 실행 중 오류 발생")
+
+
 def _tick() -> None:
     """스케줄러 한 사이클 분량의 로직. 신규 게시물/정부 정책/네이버뉴스 API/매경 API는
     각자 독립된 스케줄로 체크하고, 브리핑 아카이빙은 스케줄과 무관하게 매 tick 확인한다."""
@@ -212,6 +266,8 @@ def _tick() -> None:
     _tick_archive_briefings()
     _tick_pdf_presummary()
     _tick_auto_vectorize()
+    _tick_db_health_check()
+    _tick_db_backup()
 
 
 def _loop() -> None:

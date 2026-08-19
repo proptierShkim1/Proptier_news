@@ -58,7 +58,7 @@ _DATA_UPLOAD_SKIP = {
     "policy_collection_schedule.json", "naver_news_collection_schedule.json",
     "mk_news_collection_schedule.json", "vector_collection_schedule.json",
     "channel_visibility.json", "agent_chat_history.json", "deploy_log.jsonl",
-    "scheduler.log", "scheduler_last_fired.json", "vector_backups",
+    "scheduler.log", "scheduler_last_fired.json", "vector_backups", "db_backups",
 }
 
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
@@ -143,10 +143,16 @@ def _sftp_mkdir_p(sftp, remote: str):
                 pass
 
 
+_DATA_UPLOAD_SKIP_PREFIXES = ("news.db.corrupted-", "news.db.autofailed-", "news.db.backup-")
+
+
 def _sftp_upload_dir(sftp, local_dir: Path, remote_dir: str, log, skip_names: set = frozenset()):
     _sftp_mkdir_p(sftp, remote_dir)
     for item in sorted(local_dir.iterdir()):
-        if item.name in _SFTP_SKIP or item.suffix == ".pyc" or item.name in skip_names:
+        if (
+            item.name in _SFTP_SKIP or item.suffix == ".pyc" or item.name in skip_names
+            or item.name.startswith(_DATA_UPLOAD_SKIP_PREFIXES)
+        ):
             continue
         remote_item = f"{remote_dir}/{item.name}"
         if item.is_dir():
