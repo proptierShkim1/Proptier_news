@@ -161,6 +161,26 @@ def test_sync_vector_index_backfills_mentions_and_policy_events_missing_from_ind
     assert result == {"mentions": 1, "policy_events": 1}
 
 
+def test_sync_vector_index_clears_and_skips_rows_with_unparseable_embedding():
+    """DB 복구 과정에서 embedding 컬럼에 JSON이 아닌 값(엉뚱한 텍스트 등)이 들어간
+    경우 sync_vector_index 전체가 죽지 않고, 그 행만 벡터화 대기 상태로 되돌려야 한다."""
+    mention_rows = [{"id": 1, "embedding": "[0.1, 0.2]"}, {"id": 2, "embedding": "깨진 텍스트"}]
+    policy_rows = [{"id": 3, "embedding": "not json"}]
+    with patch("db.get_mentions_missing_vector_index", return_value=mention_rows), \
+         patch("db.get_policy_events_missing_vector_index", return_value=policy_rows), \
+         patch("db.upsert_mention_vectors_batch") as mock_upsert_mention, \
+         patch("db.upsert_policy_vectors_batch") as mock_upsert_policy, \
+         patch("db.clear_mention_embeddings") as mock_clear_mention, \
+         patch("db.clear_policy_event_embeddings") as mock_clear_policy:
+        result = vectorizer.sync_vector_index()
+
+    mock_upsert_mention.assert_called_once_with([(1, [0.1, 0.2])])
+    mock_upsert_policy.assert_called_once_with([])
+    mock_clear_mention.assert_called_once_with([2])
+    mock_clear_policy.assert_called_once_with([3])
+    assert result == {"mentions": 1, "policy_events": 0}
+
+
 def test_export_vector_backup_bundles_mentions_and_policy_events():
     with patch("db.get_mention_embeddings_for_backup", return_value=[{"url": "u1", "embedding": "[0.1]"}]), \
          patch("db.get_policy_event_embeddings_for_backup", return_value=[{"url": "u2", "embedding": "[0.2]"}]):

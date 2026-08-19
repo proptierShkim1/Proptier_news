@@ -162,12 +162,33 @@ def sync_vector_index() -> dict:
     호출해서, 새로 벡터화한 건 외에 과거에 남아있던 누락분도 함께 메운다. Gemini 호출이
     없는 순수 로컬 작업이라 건수를 굳이 제한하지 않는다(색인이 통째로 날아간 복구
     시나리오에서 일부만 채우고 끝나면 안 되므로) — 커넥션도 하나로 재사용해 수천 건도
-    금방 끝난다."""
+    금방 끝난다.
+
+    embedding 컬럼 값이 JSON으로 파싱되지 않는 행(DB 복구 과정에서 컬럼이 잘못 매핑돼
+    엉뚱한 텍스트가 들어간 경우 등)은 색인에 넣지 않고 embedding을 비워 되돌린다 —
+    그래야 다음 벡터화 배치에서 정상적으로 다시 임베딩된다."""
     mention_rows = db.get_mentions_missing_vector_index(limit=_FULL_REINDEX_LIMIT)
-    db.upsert_mention_vectors_batch([(r["id"], json.loads(r["embedding"])) for r in mention_rows])
+    mention_vectors, bad_mention_ids = [], []
+    for r in mention_rows:
+        try:
+            mention_vectors.append((r["id"], json.loads(r["embedding"])))
+        except (json.JSONDecodeError, TypeError):
+            bad_mention_ids.append(r["id"])
+    db.upsert_mention_vectors_batch(mention_vectors)
+    if bad_mention_ids:
+        db.clear_mention_embeddings(bad_mention_ids)
+
     policy_rows = db.get_policy_events_missing_vector_index(limit=_FULL_REINDEX_LIMIT)
-    db.upsert_policy_vectors_batch([(r["id"], json.loads(r["embedding"])) for r in policy_rows])
-    return {"mentions": len(mention_rows), "policy_events": len(policy_rows)}
+    policy_vectors, bad_policy_ids = [], []
+    for r in policy_rows:
+        try:
+            policy_vectors.append((r["id"], json.loads(r["embedding"])))
+        except (json.JSONDecodeError, TypeError):
+            bad_policy_ids.append(r["id"])
+    db.upsert_policy_vectors_batch(policy_vectors)
+    if bad_policy_ids:
+        db.clear_policy_event_embeddings(bad_policy_ids)
+    return {"mentions": len(mention_vectors), "policy_events": len(policy_vectors)}
 
 
 def vectorize_pending(

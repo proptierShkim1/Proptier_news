@@ -427,6 +427,18 @@ def test_update_mention_embedding_removes_it_from_pending(tmp_path, monkeypatch)
     assert db.get_mentions()[0]["embedding"] == "[0.1, 0.2]"
 
 
+def test_clear_mention_embeddings_resets_to_pending(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1"))
+    mention_id = db.get_mentions()[0]["id"]
+    db.update_mention_embedding(mention_id, "깨진 텍스트")
+
+    db.clear_mention_embeddings([mention_id])
+
+    assert db.get_mentions()[0]["embedding"] == ""
+    assert db.count_mentions_without_embedding() == 1
+
+
 def test_policy_events_default_to_empty_embedding(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     db.insert_policy_event({
@@ -436,6 +448,21 @@ def test_policy_events_default_to_empty_embedding(tmp_path, monkeypatch):
 
     assert db.count_policy_events_without_embedding() == 1
     assert db.get_policy_events_without_embedding()[0]["title"] == "제목"
+
+
+def test_clear_policy_event_embeddings_resets_to_pending(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_policy_event({
+        "source": "국토부", "title": "제목", "url": "https://p/1", "department": "",
+        "announced_at": "2026-08-01", "view_count": 0, "collected_at": "2026-08-01 09:00:00",
+    })
+    event_id = db.get_policy_events()[0]["id"]
+    db.update_policy_event_embedding(event_id, "깨진 텍스트")
+
+    db.clear_policy_event_embeddings([event_id])
+
+    assert db.get_policy_events()[0]["embedding"] == ""
+    assert db.count_policy_events_without_embedding() == 1
 
 
 def test_update_policy_event_embedding_removes_it_from_pending(tmp_path, monkeypatch):
@@ -793,6 +820,21 @@ def test_get_distinct_mention_dates_returns_unique_dates_only(tmp_path, monkeypa
     db.insert_mention({**_mention(url="https://x/4"), "collected_at": "2026-08-07 09:00:00"})
 
     assert db.get_distinct_mention_dates() == {"2026-08-05", "2026-08-06", "2026-08-07"}
+
+
+def test_get_distinct_mention_dates_drops_unparseable_collected_at(tmp_path, monkeypatch):
+    """.recover 복구 등으로 collected_at이 NULL이거나 날짜로 해석 불가능한 값이 되면
+    SQL date()가 NULL을 반환하는데, 그 NULL이 다른 날짜 문자열과 섞여 브리핑 화면에서
+    정렬될 때 TypeError('<' not supported between NoneType and str)로 죽었었다."""
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention({**_mention(url="https://x/1"), "collected_at": "2026-08-05 09:00:00"})
+    db.insert_mention({**_mention(url="https://x/2"), "collected_at": "완전히 깨진 값"})
+    db.insert_mention({**_mention(url="https://x/3"), "collected_at": "2026-08-06 09:00:00"})
+
+    dates = db.get_distinct_mention_dates()
+
+    assert dates == {"2026-08-05", "2026-08-06"}
+    assert None not in dates
 
 
 def test_insert_api_usage_then_get_summary_aggregates_by_feature(tmp_path, monkeypatch):

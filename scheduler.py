@@ -2,6 +2,7 @@
 hana_p — 등록된 시각에 맞춰 자동 수집을 실행하는 백그라운드 스케줄러.
 """
 
+import json
 import logging
 import threading
 import time
@@ -26,17 +27,34 @@ _POLL_SECONDS = 30
 _POLICY_COLLECTION_DAYS = 3
 # PDF 상위 항목 AI 요약 미리 생성 주기 — 수집 스케줄과는 무관하게 별도로 돈다.
 _PDF_PRESUMMARY_INTERVAL_MINUTES = 5
-_last_fired = ""
-_last_fired_policy = ""
-_last_fired_naver_news = ""
-_last_fired_mk_news = ""
-_last_fired_vectorize = ""
 _last_pdf_presummary: datetime | None = None
 _lock = threading.Lock()
 _started = False
 
 _LOG_DIR = Path(__file__).resolve().parent / "data"
 _LOG_FILE = _LOG_DIR / "scheduler.log"
+_LAST_FIRED_FILE = _LOG_DIR / "scheduler_last_fired.json"
+
+
+def _load_last_fired_state() -> dict:
+    """어느 스케줄이 어느 분(minute)에 마지막으로 실행됐는지를 파일로 들고 있는다 —
+    이전에는 파이썬 전역 변수였는데, 그러면 서버를 재시작할 때마다 초기화돼서 "이번
+    분에 이미 실행했는지"를 까먹는다. 배포 중 서버를 여러 번 재시작하는 동안 같은
+    예정 시각(예: 18:00)에 벡터화/수집 배치가 몇 번씩 중복 실행되며 DB에 짧은 시간에
+    과도한 쓰기가 몰려 손상으로 이어진 사고(2026-08-18)가 있어서, 프로세스 재시작에도
+    살아남는 파일 기반 상태로 바꿨다."""
+    try:
+        return json.loads(_LAST_FIRED_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_last_fired_state(state: dict) -> None:
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
+    _LAST_FIRED_FILE.write_text(json.dumps(state), encoding="utf-8")
+
+
+_last_fired_state = _load_last_fired_state()
 
 logger = logging.getLogger("hana_p.scheduler")
 logger.setLevel(logging.INFO)
@@ -53,17 +71,17 @@ def schedule_matches_now(times: list, now: datetime) -> bool:
 
 def _tick_new_posts() -> None:
     """신규 게시물(브랜드/시장 키워드) 자동 수집 체크. 예외를 상위로 전파하지 않는다."""
-    global _last_fired
     try:
         now = datetime.now()
         minute_key = now.strftime("%Y-%m-%d %H:%M")
         with _lock:
-            already_fired = minute_key == _last_fired
+            already_fired = minute_key == _last_fired_state.get("new_posts")
         if not already_fired:
             schedules = load_collection_schedule()["times"]
             if schedule_matches_now(schedules, now):
                 with _lock:
-                    _last_fired = minute_key
+                    _last_fired_state["new_posts"] = minute_key
+                    _save_last_fired_state(_last_fired_state)
                 collector.start_background_collection(trigger="자동")
     except Exception:
         logger.exception("스케줄러(신규 게시물) 반복 실행 중 오류 발생")
@@ -71,17 +89,17 @@ def _tick_new_posts() -> None:
 
 def _tick_policy() -> None:
     """정부 정책 자동 수집 체크. 신규 게시물과 독립된 스케줄/예외 처리."""
-    global _last_fired_policy
     try:
         now = datetime.now()
         minute_key = now.strftime("%Y-%m-%d %H:%M")
         with _lock:
-            already_fired = minute_key == _last_fired_policy
+            already_fired = minute_key == _last_fired_state.get("policy")
         if not already_fired:
             schedules = load_policy_collection_schedule()["times"]
             if schedule_matches_now(schedules, now):
                 with _lock:
-                    _last_fired_policy = minute_key
+                    _last_fired_state["policy"] = minute_key
+                    _save_last_fired_state(_last_fired_state)
                 started_run_id = collector.start_background_policy_collection(
                     days=_POLICY_COLLECTION_DAYS, trigger="자동"
                 )
@@ -92,17 +110,17 @@ def _tick_policy() -> None:
 
 def _tick_naver_news() -> None:
     """네이버뉴스 API 자동 수집 체크. 신규 게시물/정부 정책과 독립된 스케줄/예외 처리."""
-    global _last_fired_naver_news
     try:
         now = datetime.now()
         minute_key = now.strftime("%Y-%m-%d %H:%M")
         with _lock:
-            already_fired = minute_key == _last_fired_naver_news
+            already_fired = minute_key == _last_fired_state.get("naver_news")
         if not already_fired:
             schedules = load_naver_news_collection_schedule()["times"]
             if schedule_matches_now(schedules, now):
                 with _lock:
-                    _last_fired_naver_news = minute_key
+                    _last_fired_state["naver_news"] = minute_key
+                    _save_last_fired_state(_last_fired_state)
                 started_run_id = collector.start_background_naver_news_collection(trigger="자동")
                 logger.info("네이버뉴스 API 자동 수집 시작 (run_id=%s)", started_run_id)
     except Exception:
@@ -111,17 +129,17 @@ def _tick_naver_news() -> None:
 
 def _tick_mk_news() -> None:
     """매경 API 자동 수집 체크. 다른 채널과 독립된 스케줄/예외 처리."""
-    global _last_fired_mk_news
     try:
         now = datetime.now()
         minute_key = now.strftime("%Y-%m-%d %H:%M")
         with _lock:
-            already_fired = minute_key == _last_fired_mk_news
+            already_fired = minute_key == _last_fired_state.get("mk_news")
         if not already_fired:
             schedules = load_mk_news_collection_schedule()["times"]
             if schedule_matches_now(schedules, now):
                 with _lock:
-                    _last_fired_mk_news = minute_key
+                    _last_fired_state["mk_news"] = minute_key
+                    _save_last_fired_state(_last_fired_state)
                 started_run_id = collector.start_background_mk_news_collection(trigger="자동")
                 logger.info("매경 API 자동 수집 시작 (run_id=%s)", started_run_id)
     except Exception:
@@ -166,17 +184,17 @@ def _tick_auto_vectorize() -> None:
     등록/관리하는 스케줄을 따르며, 신규 게시물/정책/네이버뉴스 API와 완전히 독립된
     스케줄이다(다른 자동 수집이 하나도 등록 안 된 경우와 동일하게, 벡터화 시각도 등록
     안 하면 자동 실행되지 않고 수동 "벡터화 진행" 버튼만 동작한다)."""
-    global _last_fired_vectorize
     try:
         now = datetime.now()
         minute_key = now.strftime("%Y-%m-%d %H:%M")
         with _lock:
-            already_fired = minute_key == _last_fired_vectorize
+            already_fired = minute_key == _last_fired_state.get("vectorize")
         if not already_fired:
             schedules = load_vector_collection_schedule()["times"]
             if schedule_matches_now(schedules, now):
                 with _lock:
-                    _last_fired_vectorize = minute_key
+                    _last_fired_state["vectorize"] = minute_key
+                    _save_last_fired_state(_last_fired_state)
                 if vectorizer.has_api_keys():
                     started_run_id = vectorizer.start_background_vectorize(trigger="자동")
                     logger.info("벡터화 자동 실행 시작 (run_id=%s)", started_run_id)

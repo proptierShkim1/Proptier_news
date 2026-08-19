@@ -1,6 +1,31 @@
 from datetime import datetime, timedelta
 
+import pytest
+
 import scheduler
+
+
+@pytest.fixture(autouse=True)
+def _isolate_last_fired_state(monkeypatch, tmp_path):
+    """_last_fired_state는 서버 재시작에도 살아남도록 파일에 저장되는데, 테스트에서는
+    실제 저장소 파일을 건드리면 안 되고 테스트 간에도 상태가 새지 않아야 한다 — 매
+    테스트마다 격리된 임시 파일 경로를 쓰게 하면 실제 저장 함수를 그대로 써도 안전하다."""
+    monkeypatch.setattr(scheduler, "_last_fired_state", {})
+    monkeypatch.setattr(scheduler, "_LAST_FIRED_FILE", tmp_path / "scheduler_last_fired.json")
+
+
+def test_last_fired_state_persists_across_process_restart():
+    """2026-08-18 사고 재현: 예전엔 _last_fired_*가 파이썬 전역 변수라 서버를 재시작할
+    때마다 초기화됐다 — 트러블슈팅 중 서버를 짧은 시간에 여러 번 재시작하면, 매번 새
+    프로세스가 "이번 분엔 아직 안 돌렸다"고 착각해 같은 예정 시각(예: 18:00)에 벡터화
+    배치가 몇 번씩 중복 실행되며 DB에 과도한 쓰기가 몰려 손상으로 이어졌다. 이제는
+    파일에 저장되므로, 새 프로세스(=새로 읽은 상태)에서도 이미 발화한 분을 기억해야
+    한다."""
+    scheduler._save_last_fired_state({"vectorize": "2026-08-18 18:00"})
+
+    reloaded = scheduler._load_last_fired_state()
+
+    assert reloaded == {"vectorize": "2026-08-18 18:00"}
 
 
 def test_schedule_matches_now_true_when_time_in_list():
@@ -23,10 +48,6 @@ def _fix_now(monkeypatch, fixed_now):
 
 
 def _reset(monkeypatch):
-    monkeypatch.setattr(scheduler, "_last_fired", "")
-    monkeypatch.setattr(scheduler, "_last_fired_policy", "")
-    monkeypatch.setattr(scheduler, "_last_fired_naver_news", "")
-    monkeypatch.setattr(scheduler, "_last_fired_mk_news", "")
     # 매경 API 스케줄은 이 스케줄을 직접 테스트하는 케이스가 아니면 빈 스케줄로
     # 고정해, 다른 tick 테스트가 실제 데이터 파일 유무에 좌우되지 않게 한다.
     monkeypatch.setattr(scheduler, "load_mk_news_collection_schedule", lambda: {"times": []})
@@ -60,8 +81,8 @@ def test_tick_new_posts_and_policy_fire_on_their_own_independent_schedules(monke
 
     assert brand_calls == []  # 신규 게시물 스케줄에는 09:00이 없으므로 실행되지 않음
     assert policy_calls == [(scheduler._POLICY_COLLECTION_DAYS, "자동")]
-    assert scheduler._last_fired == ""
-    assert scheduler._last_fired_policy == "2026-07-16 09:00"
+    assert scheduler._last_fired_state.get("new_posts") is None
+    assert scheduler._last_fired_state["policy"] == "2026-07-16 09:00"
 
 
 def test_tick_policy_does_not_fire_twice_for_same_minute(monkeypatch):
@@ -99,7 +120,7 @@ def test_tick_swallows_exception_from_policy_collection(monkeypatch, caplog):
     with caplog.at_level("ERROR", logger="hana_p.scheduler"):
         scheduler._tick()
 
-    assert scheduler._last_fired_policy == "2026-07-16 09:00"
+    assert scheduler._last_fired_state["policy"] == "2026-07-16 09:00"
     assert any("오류" in record.message for record in caplog.records)
 
 
@@ -122,7 +143,7 @@ def test_tick_new_posts_fires_in_background_without_blocking(monkeypatch):
     scheduler._tick()
 
     assert calls == ["자동"]
-    assert scheduler._last_fired == "2026-07-16 09:00"
+    assert scheduler._last_fired_state["new_posts"] == "2026-07-16 09:00"
 
 
 def test_tick_swallows_exception_from_load_policy_collection_schedule(monkeypatch, caplog):
@@ -166,7 +187,7 @@ def test_tick_naver_news_fires_on_its_own_independent_schedule(monkeypatch):
     scheduler._tick()
 
     assert calls == [("naver_news", "자동")]
-    assert scheduler._last_fired_naver_news == "2026-07-16 09:00"
+    assert scheduler._last_fired_state["naver_news"] == "2026-07-16 09:00"
 
 
 def test_tick_naver_news_does_not_fire_twice_for_same_minute(monkeypatch):
@@ -203,7 +224,7 @@ def test_tick_swallows_exception_from_naver_news_collection(monkeypatch, caplog)
     with caplog.at_level("ERROR", logger="hana_p.scheduler"):
         scheduler._tick()
 
-    assert scheduler._last_fired_naver_news == "2026-07-16 09:00"
+    assert scheduler._last_fired_state["naver_news"] == "2026-07-16 09:00"
     assert any("오류" in record.message for record in caplog.records)
 
 
@@ -235,7 +256,7 @@ def test_tick_mk_news_fires_on_its_own_independent_schedule(monkeypatch):
     scheduler._tick()
 
     assert calls == [("mk_news", "자동")]
-    assert scheduler._last_fired_mk_news == "2026-07-16 09:00"
+    assert scheduler._last_fired_state["mk_news"] == "2026-07-16 09:00"
 
 
 def test_tick_mk_news_does_not_fire_twice_for_same_minute(monkeypatch):
@@ -274,7 +295,7 @@ def test_tick_swallows_exception_from_mk_news_collection(monkeypatch, caplog):
     with caplog.at_level("ERROR", logger="hana_p.scheduler"):
         scheduler._tick()
 
-    assert scheduler._last_fired_mk_news == "2026-07-16 09:00"
+    assert scheduler._last_fired_state["mk_news"] == "2026-07-16 09:00"
     assert any("오류" in record.message for record in caplog.records)
 
 
@@ -331,7 +352,6 @@ def test_tick_pdf_presummary_swallows_exception(monkeypatch, caplog):
 
 
 def test_tick_auto_vectorize_fires_on_its_own_independent_schedule(monkeypatch):
-    monkeypatch.setattr(scheduler, "_last_fired_vectorize", "")
     _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
     monkeypatch.setattr(scheduler, "load_vector_collection_schedule", lambda: {"times": ["09:00"]})
     monkeypatch.setattr(scheduler.vectorizer, "has_api_keys", lambda: True)
@@ -344,11 +364,10 @@ def test_tick_auto_vectorize_fires_on_its_own_independent_schedule(monkeypatch):
     scheduler._tick_auto_vectorize()
 
     assert calls == ["자동"]
-    assert scheduler._last_fired_vectorize == "2026-07-16 09:00"
+    assert scheduler._last_fired_state["vectorize"] == "2026-07-16 09:00"
 
 
 def test_tick_auto_vectorize_does_not_fire_when_time_not_in_schedule(monkeypatch):
-    monkeypatch.setattr(scheduler, "_last_fired_vectorize", "")
     _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 1))
     monkeypatch.setattr(scheduler, "load_vector_collection_schedule", lambda: {"times": ["09:00"]})
     monkeypatch.setattr(scheduler.vectorizer, "has_api_keys", lambda: True)
@@ -363,7 +382,6 @@ def test_tick_auto_vectorize_does_not_fire_when_time_not_in_schedule(monkeypatch
 
 
 def test_tick_auto_vectorize_does_not_fire_twice_for_same_minute(monkeypatch):
-    monkeypatch.setattr(scheduler, "_last_fired_vectorize", "")
     _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
     monkeypatch.setattr(scheduler, "load_vector_collection_schedule", lambda: {"times": ["09:00"]})
     monkeypatch.setattr(scheduler.vectorizer, "has_api_keys", lambda: True)
@@ -380,7 +398,6 @@ def test_tick_auto_vectorize_does_not_fire_twice_for_same_minute(monkeypatch):
 
 
 def test_tick_auto_vectorize_skips_starting_a_run_when_no_api_keys(monkeypatch):
-    monkeypatch.setattr(scheduler, "_last_fired_vectorize", "")
     _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
     monkeypatch.setattr(scheduler, "load_vector_collection_schedule", lambda: {"times": ["09:00"]})
     monkeypatch.setattr(scheduler.vectorizer, "has_api_keys", lambda: False)
@@ -394,11 +411,10 @@ def test_tick_auto_vectorize_skips_starting_a_run_when_no_api_keys(monkeypatch):
     assert calls == []
     # 스케줄 자체는 매칭되어 이번 분에 "발화"한 것으로 기록된다 — 다음 tick에서 다시
     # 시도하지 않지만, 다음 등록 시각에는 정상적으로 다시 시도한다.
-    assert scheduler._last_fired_vectorize == "2026-07-16 09:00"
+    assert scheduler._last_fired_state["vectorize"] == "2026-07-16 09:00"
 
 
 def test_tick_auto_vectorize_swallows_exception(monkeypatch, caplog):
-    monkeypatch.setattr(scheduler, "_last_fired_vectorize", "")
     _fix_now(monkeypatch, datetime(2026, 7, 16, 9, 0))
     monkeypatch.setattr(scheduler, "load_vector_collection_schedule", lambda: {"times": ["09:00"]})
     monkeypatch.setattr(scheduler.vectorizer, "has_api_keys", lambda: True)
@@ -411,7 +427,7 @@ def test_tick_auto_vectorize_swallows_exception(monkeypatch, caplog):
     with caplog.at_level("ERROR", logger="hana_p.scheduler"):
         scheduler._tick_auto_vectorize()
 
-    assert scheduler._last_fired_vectorize == "2026-07-16 09:00"
+    assert scheduler._last_fired_state["vectorize"] == "2026-07-16 09:00"
     assert any("오류" in record.message for record in caplog.records)
 
 
@@ -441,10 +457,6 @@ def test_tick_archive_briefings_swallows_exception(monkeypatch, caplog):
 def test_tick_includes_archive_briefings_when_not_disabled(monkeypatch):
     """_reset()의 비활성화 없이 _tick()을 직접 호출하면 브리핑 아카이빙 tick도 함께 도는지
     확인 — _tick()에 실제로 연결됐는지 검증하는 목적."""
-    monkeypatch.setattr(scheduler, "_last_fired", "")
-    monkeypatch.setattr(scheduler, "_last_fired_policy", "")
-    monkeypatch.setattr(scheduler, "_last_fired_naver_news", "")
-    monkeypatch.setattr(scheduler, "_last_fired_mk_news", "")
     monkeypatch.setattr(scheduler, "load_collection_schedule", lambda: {"times": []})
     monkeypatch.setattr(scheduler, "load_policy_collection_schedule", lambda: {"times": []})
     monkeypatch.setattr(scheduler, "load_naver_news_collection_schedule", lambda: {"times": []})

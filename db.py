@@ -20,6 +20,11 @@ def _connect() -> sqlite3.Connection:
     sqlite-vec 확장을 매 연결마다 로드해서 mention_vectors/policy_vectors 가상 테이블을
     쓸 수 있게 한다 — 로딩 자체는 캐싱된 네이티브 라이브러리를 참조하는 정도라 비용이 작다."""
     con = sqlite3.connect(DB_PATH, timeout=30.0)
+    # 기본 text_factory(str)는 TEXT 컬럼 바이트를 엄격한 UTF-8로 디코딩하다가 유효하지
+    # 않은 바이트를 만나면 sqlite3.OperationalError로 죽는다 — DB 복구 과정에서 컬럼이
+    # 잘못 매핑돼 깨진 바이트가 들어간 행이 있어도(2026-08-18 사고) 조회 자체가 죽지
+    # 않도록, 못 읽는 바이트만 U+FFFD로 바꿔치기하는 관대한 디코더를 쓴다.
+    con.text_factory = lambda b: b.decode("utf-8", errors="replace")
     con.enable_load_extension(True)
     sqlite_vec.load(con)
     con.enable_load_extension(False)
@@ -579,6 +584,26 @@ def update_policy_event_embedding(event_id: int, embedding_json: str) -> None:
         )
 
 
+def clear_mention_embeddings(ids: list[int]) -> None:
+    """embedding 값이 손상돼(JSON 파싱 불가) 색인에 못 넣는 행을 벡터화 대기 상태로
+    되돌린다 — 다음 벡터화 배치가 정상적으로 다시 임베딩하게 된다."""
+    if not ids:
+        return
+    init_db()
+    with _connect() as con:
+        placeholders = ",".join("?" * len(ids))
+        con.execute(f"UPDATE mentions SET embedding = '' WHERE id IN ({placeholders})", ids)
+
+
+def clear_policy_event_embeddings(ids: list[int]) -> None:
+    if not ids:
+        return
+    init_db()
+    with _connect() as con:
+        placeholders = ",".join("?" * len(ids))
+        con.execute(f"UPDATE policy_events SET embedding = '' WHERE id IN ({placeholders})", ids)
+
+
 def get_mentions_without_embedding(limit: int = 200) -> list[dict]:
     init_db()
     with _connect() as con:
@@ -997,4 +1022,7 @@ def get_distinct_mention_dates() -> set[str]:
     비용을 이 한 번의 DISTINCT 쿼리로만 감수하고 gap-date는 아예 걸러낸다."""
     init_db()
     with _connect() as con:
-        return {r[0] for r in con.execute("SELECT DISTINCT date(collected_at) FROM mentions").fetchall()}
+        return {
+            r[0] for r in con.execute("SELECT DISTINCT date(collected_at) FROM mentions").fetchall()
+            if r[0] is not None
+        }
