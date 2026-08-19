@@ -25,6 +25,13 @@ def _connect() -> sqlite3.Connection:
     # 잘못 매핑돼 깨진 바이트가 들어간 행이 있어도(2026-08-18 사고) 조회 자체가 죽지
     # 않도록, 못 읽는 바이트만 U+FFFD로 바꿔치기하는 관대한 디코더를 쓴다.
     con.text_factory = lambda b: b.decode("utf-8", errors="replace")
+    # journal_mode와 달리 synchronous는 DB 파일에 영구 저장되지 않고 커넥션마다 매번
+    # 다시 설정해야 한다 — 기본값(WAL에서는 NORMAL)은 매 커밋마다 fsync하지 않아 더
+    # 빠르지만, 프로세스가 하필 쓰기 도중 죽으면(배포 재시작, 세그폴트, OOM-kill 등
+    # 2026-08-14~19에 반복됐던 상황들) 디스크에 아직 안 쓰인 데이터가 있어 손상
+    # 가능성이 남는다. 매 커밋을 확실히 디스크에 fsync하는 FULL로 올려 내구성을
+    # 우선한다 — 이 앱은 쓰기량이 많지 않아 성능 영향은 미미하다.
+    con.execute("PRAGMA synchronous=FULL")
     con.enable_load_extension(True)
     sqlite_vec.load(con)
     con.enable_load_extension(False)
