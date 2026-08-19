@@ -138,23 +138,6 @@ def export_vector_backup() -> dict:
     }
 
 
-def import_vector_backup(backup: dict) -> dict:
-    """백업 dict를 현재 DB에 되돌린다. url이 일치하고 아직 embedding이 비어있는 행에만
-    채워 넣는다(이미 값이 있는 행은 덮어쓰지 않음). 이후 sqlite-vec 색인도 함께 채운다."""
-    mention_result = db.restore_mention_embeddings_by_url(backup.get("mentions", []))
-    policy_result = db.restore_policy_event_embeddings_by_url(backup.get("policy_events", []))
-    index_result = sync_vector_index()
-    return {
-        "mentions_restored": mention_result["restored"],
-        "mentions_already_present": mention_result["already_present"],
-        "mentions_not_found": mention_result["not_found"],
-        "policy_restored": policy_result["restored"],
-        "policy_already_present": policy_result["already_present"],
-        "policy_not_found": policy_result["not_found"],
-        "index_synced": index_result,
-    }
-
-
 def sync_vector_index() -> dict:
     """mentions.embedding/policy_events.embedding에는 있지만 아직 sqlite-vec 색인
     (mention_vectors/policy_vectors)에는 없는 행을 채운다 — 색인 테이블이 나중에

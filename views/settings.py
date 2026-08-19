@@ -49,8 +49,17 @@ _UPLOAD_SUFFIXES = {".py", ".toml", ".txt", ".md", ".sh"}
 _UPLOAD_DIRS     = {"views", "crawlers", ".streamlit", "data", "scripts"}
 _UPLOAD_ROOT_EXTRAS = {".env"}
 _SFTP_SKIP       = {"__pycache__", ".git", "venv"}
-# 원격 서버가 자체적으로 쌓아온 수집 데이터를 로컬 배포가 덮어쓰지 않도록 제외
-_DATA_UPLOAD_SKIP = {"news.db"}
+# 원격 서버가 자체적으로 쌓아온 수집 데이터/운영 상태를 로컬 배포가 덮어쓰지 않도록
+# 제외한다 — .gitignore의 data/ 항목과 동일한 목록. 예전엔 news.db만 제외해서, 로컬의
+# scheduler.log/vector_backups 등이 배포 때마다 서버 것을 덮어쓰고 있었다(로컬 pytest
+# 실행 흔적이 서버 로그에 섞여 있던 원인).
+_DATA_UPLOAD_SKIP = {
+    "news.db", "access_config.json", "keywords.json", "collection_schedule.json",
+    "policy_collection_schedule.json", "naver_news_collection_schedule.json",
+    "mk_news_collection_schedule.json", "vector_collection_schedule.json",
+    "channel_visibility.json", "agent_chat_history.json", "deploy_log.jsonl",
+    "scheduler.log", "scheduler_last_fired.json", "vector_backups",
+}
 
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
@@ -147,6 +156,18 @@ def _sftp_upload_dir(sftp, local_dir: Path, remote_dir: str, log, skip_names: se
             log(f"↑ {item.relative_to(ROOT)}")
 
 
+def _stop_streamlit(ssh, log):
+    """배포 시작 전에 실행 중인 서버부터 죽인다 — 이전엔 코드 업로드/pip install을
+    기존 프로세스가 떠 있는 채로 진행했는데, 그러면 그 프로세스가 이미 메모리에 적재한
+    pandas/pyarrow 같은 공유 라이브러리 파일을 pip install이 그 자리에서 갈아치우면서
+    세그폴트를 유발하고, 하필 그 순간이 SQLite 쓰기 중이라 news.db가 반복 손상된
+    사고(2026-08-14~19)로 이어졌다. 파일을 건드리기 전에 프로세스를 확실히 내려서
+    이 위험을 원천 차단한다."""
+    cmd = f"pkill -9 -f 'streamlit run app.py --server.port {_DEPLOY_APP_PORT}' 2>/dev/null; sleep 1; true"
+    _ssh_run(ssh, cmd, timeout=15)
+    log("🛑 기존 서버 프로세스 정지")
+
+
 def _start_streamlit(ssh, log):
     script = f"{_DEPLOY_REMOTE}/scripts/start_server.sh"
     cmd = (
@@ -178,6 +199,9 @@ def _deploy():
 
         out, _, _ = _ssh_run(ssh, f"test -d {_DEPLOY_REMOTE}/venv && echo YES || echo NO")
         first_deploy = out.strip() != "YES"
+
+        if not first_deploy:
+            _stop_streamlit(ssh, log)
 
         sftp = ssh.open_sftp()
         _ssh_run(ssh, f"mkdir -p {_DEPLOY_REMOTE}")
@@ -1278,6 +1302,45 @@ def _format_vector_restore_result(result: dict) -> str:
     )
 
 
+def _run_vector_restore_with_status(backup: dict) -> dict:
+    """복구는 보통 몇 초 안에 끝나지만, 그 몇 초 동안 화면이 멈춘 것처럼 보이지 않게
+    st.status()로 단계(뉴스 복구 → 정책 복구 → 색인 재생성)를 실시간으로 보여준다."""
+    with st.status("벡터 백업 복구 시작...", expanded=True) as status:
+        mention_rows = backup.get("mentions", [])
+        status.update(label=f"뉴스 임베딩 복구 중... ({len(mention_rows):,}건)")
+        mention_result = db.restore_mention_embeddings_by_url(mention_rows)
+        st.write(
+            f"✅ 뉴스: {mention_result['restored']:,}건 반영 · "
+            f"이미 있던 값 {mention_result['already_present']:,}건 · "
+            f"못 찾음 {mention_result['not_found']:,}건"
+        )
+
+        policy_rows = backup.get("policy_events", [])
+        status.update(label=f"정책 임베딩 복구 중... ({len(policy_rows):,}건)")
+        policy_result = db.restore_policy_event_embeddings_by_url(policy_rows)
+        st.write(
+            f"✅ 정책: {policy_result['restored']:,}건 반영 · "
+            f"이미 있던 값 {policy_result['already_present']:,}건 · "
+            f"못 찾음 {policy_result['not_found']:,}건"
+        )
+
+        status.update(label="벡터 색인(sqlite-vec) 재생성 중...")
+        index_result = vectorizer.sync_vector_index()
+        st.write(f"✅ 색인 재생성: 뉴스 {index_result['mentions']:,}건 · 정책 {index_result['policy_events']:,}건")
+
+        status.update(label="복구 완료", state="complete")
+
+    return {
+        "mentions_restored": mention_result["restored"],
+        "mentions_already_present": mention_result["already_present"],
+        "mentions_not_found": mention_result["not_found"],
+        "policy_restored": policy_result["restored"],
+        "policy_already_present": policy_result["already_present"],
+        "policy_not_found": policy_result["not_found"],
+        "index_synced": index_result,
+    }
+
+
 def _render_vector_backup_restore():
     st.subheader("💾 벡터 백업 / 복구")
     st.caption(
@@ -1330,7 +1393,7 @@ def _render_vector_backup_restore():
             with c3:
                 if st.button("♻️ 복구", key=f"vector_backup_restore_{f.name}"):
                     backup = json.loads(f.read_text(encoding="utf-8"))
-                    result = vectorizer.import_vector_backup(backup)
+                    result = _run_vector_restore_with_status(backup)
                     db.log_activity(
                         st.session_state.get("_client_ip", ""), "설정 · 벡터 데이터", "벡터 백업 복구", f.name,
                     )
@@ -1347,7 +1410,7 @@ def _render_vector_backup_restore():
         except Exception:
             st.error("올바른 JSON 파일이 아닙니다.")
         else:
-            result = vectorizer.import_vector_backup(backup)
+            result = _run_vector_restore_with_status(backup)
             db.log_activity(
                 st.session_state.get("_client_ip", ""), "설정 · 벡터 데이터", "벡터 백업 복구", uploaded.name,
             )

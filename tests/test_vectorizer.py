@@ -191,28 +191,6 @@ def test_export_vector_backup_bundles_mentions_and_policy_events():
     assert "created_at" in backup
 
 
-def test_import_vector_backup_restores_matched_urls_and_rebuilds_index():
-    backup = {
-        "mentions": [{"url": "u1", "embedding": "[0.1]"}, {"url": "u-missing", "embedding": "[0.9]"}],
-        "policy_events": [{"url": "u2", "embedding": "[0.2]"}],
-    }
-    mention_result = {"restored": 1, "already_present": 0, "not_found": 1}
-    policy_result = {"restored": 1, "already_present": 0, "not_found": 0}
-    with patch("db.restore_mention_embeddings_by_url", return_value=mention_result) as mock_mention, \
-         patch("db.restore_policy_event_embeddings_by_url", return_value=policy_result) as mock_policy, \
-         patch.object(vectorizer, "sync_vector_index", return_value={"mentions": 1, "policy_events": 1}) as mock_sync:
-        result = vectorizer.import_vector_backup(backup)
-
-    mock_mention.assert_called_once_with(backup["mentions"])
-    mock_policy.assert_called_once_with(backup["policy_events"])
-    mock_sync.assert_called_once()
-    assert result == {
-        "mentions_restored": 1, "mentions_already_present": 0, "mentions_not_found": 1,
-        "policy_restored": 1, "policy_already_present": 0, "policy_not_found": 0,
-        "index_synced": {"mentions": 1, "policy_events": 1},
-    }
-
-
 def test_search_similar_mentions_returns_empty_list_when_embedding_fails():
     with patch.object(vectorizer, "embed_text", return_value=None):
         assert vectorizer.search_similar_mentions("질문") == []
