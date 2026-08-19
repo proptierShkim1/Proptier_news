@@ -88,11 +88,18 @@ def render():
 
             with st.chat_message("assistant"):
                 with st.spinner("생각 중..."):
-                    mention_hits = vectorizer.search_similar_mentions(user_input, top_k=5)
-                    policy_hits = vectorizer.search_similar_policy_events(user_input, top_k=3)
-                    context = agent_chat.build_grounding_context(mention_hits, policy_hits)
+                    is_stats_question = agent_chat.looks_like_stats_only_question(user_input)
+                    if is_stats_question:
+                        # 지표 도구만으로 답할 수 있는 게 명백한 질문은 벡터 검색(임베딩 API
+                        # 호출 2회)을 건너뛴다 — 동시 사용자가 늘어날수록 이 절감이 커진다.
+                        context = ""
+                        sufficient = True
+                    else:
+                        mention_hits = vectorizer.search_similar_mentions(user_input, top_k=5)
+                        policy_hits = vectorizer.search_similar_policy_events(user_input, top_k=3)
+                        context = agent_chat.build_grounding_context(mention_hits, policy_hits)
+                        sufficient = agent_chat.is_grounding_sufficient(mention_hits, policy_hits)
                     reply = agent_chat.ask(history, user_input, context=context)
-                    sufficient = agent_chat.is_grounding_sufficient(mention_hits, policy_hits)
                 st.markdown(reply)
 
             assistant_turn = {"role": "assistant", "content": reply}

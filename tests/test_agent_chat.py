@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import agent_chat
+import cached_db
 
 
 @pytest.fixture(autouse=True)
@@ -13,6 +14,15 @@ def _stub_api_usage_logging(monkeypatch):
     MagicMock이라 그대로 두면 진짜 DB에 잘못된 값을 쓰려 든다 — 사용량 로깅 자체를
     검증하는 테스트를 빼고는 기본적으로 no-op 처리한다."""
     monkeypatch.setattr(agent_chat.db, "insert_api_usage", lambda *a, **kw: None)
+
+
+@pytest.fixture(autouse=True)
+def _clear_cached_db():
+    """_STATS_TOOLS는 이제 db.py를 직접 부르지 않고 cached_db.py를 거친다(다중 사용자
+    동시 질문 시 DB 재조회를 줄이기 위한 캐싱). st.cache_data는 프로세스 전역 캐시라
+    앞선 테스트가 채워둔 값이 다음 테스트에도 그대로 남을 수 있어, 매 테스트 전에
+    비운다."""
+    cached_db.clear()
 
 
 def test_has_api_keys_reflects_configured_keys(monkeypatch):
@@ -169,6 +179,24 @@ def test_is_grounding_sufficient_respects_custom_threshold():
     assert agent_chat.is_grounding_sufficient(mention_hits, [], threshold=0.3) is False
 
 
+def test_looks_like_stats_only_question_matches_clear_stat_questions():
+    assert agent_chat.looks_like_stats_only_question("오늘 뉴스 몇 건 수집됐어?") is True
+    assert agent_chat.looks_like_stats_only_question("이번달 API 비용 얼마 나왔어?") is True
+    assert agent_chat.looks_like_stats_only_question("벡터화 현황 알려줘") is True
+    assert agent_chat.looks_like_stats_only_question("요즘 가장 많이 언급된 브랜드가 뭐야?") is True
+    assert agent_chat.looks_like_stats_only_question("우리가 추적하는 브랜드 목록 보여줘") is True
+
+
+def test_looks_like_stats_only_question_ignores_spacing():
+    assert agent_chat.looks_like_stats_only_question("오늘몇건모였어") is True
+
+
+def test_looks_like_stats_only_question_false_for_content_questions():
+    assert agent_chat.looks_like_stats_only_question("직방 최근 동향 알려줘") is False
+    assert agent_chat.looks_like_stats_only_question("부동산 정책 관련해서 요즘 이슈가 뭐야?") is False
+    assert agent_chat.looks_like_stats_only_question("안녕") is False
+
+
 def test_ask_with_web_search_returns_error_message_when_no_keys_configured(monkeypatch):
     monkeypatch.setattr(agent_chat.summarizer, "_load_api_keys", lambda: [])
 
@@ -240,7 +268,7 @@ def test_ask_with_web_search_returns_fallback_message_when_all_keys_fail(monkeyp
 
 def test_get_channel_counts_groups_mentions_by_channel(monkeypatch):
     monkeypatch.setattr(
-        agent_chat.db, "get_mentions_by_collected_date",
+        agent_chat.cached_db, "get_mentions_by_collected_date",
         lambda date: [
             {"channel": "네이버", "title": "a"},
             {"channel": "네이버", "title": "b"},
@@ -254,17 +282,17 @@ def test_get_channel_counts_groups_mentions_by_channel(monkeypatch):
 
 
 def test_get_channel_counts_returns_empty_dict_when_no_mentions(monkeypatch):
-    monkeypatch.setattr(agent_chat.db, "get_mentions_by_collected_date", lambda date: [])
+    monkeypatch.setattr(agent_chat.cached_db, "get_mentions_by_collected_date", lambda date: [])
 
     assert agent_chat.get_channel_counts("2026-01-01") == {}
 
 
 def test_get_overview_stats_aggregates_all_counts(monkeypatch):
-    monkeypatch.setattr(agent_chat.db, "count_mentions", lambda: 100)
-    monkeypatch.setattr(agent_chat.db, "count_policy_events", lambda: 40)
-    monkeypatch.setattr(agent_chat.db, "count_mention_vector_index", lambda: 90)
-    monkeypatch.setattr(agent_chat.db, "count_policy_vector_index", lambda: 35)
-    monkeypatch.setattr(agent_chat.db, "get_archived_briefing_dates", lambda: {"2026-08-10", "2026-08-11"})
+    monkeypatch.setattr(agent_chat.cached_db, "count_mentions", lambda: 100)
+    monkeypatch.setattr(agent_chat.cached_db, "count_policy_events", lambda: 40)
+    monkeypatch.setattr(agent_chat.cached_db, "count_mention_vector_index", lambda: 90)
+    monkeypatch.setattr(agent_chat.cached_db, "count_policy_vector_index", lambda: 35)
+    monkeypatch.setattr(agent_chat.cached_db, "get_archived_briefing_dates", lambda: {"2026-08-10", "2026-08-11"})
 
     result = agent_chat.get_overview_stats()
 
@@ -278,14 +306,14 @@ def test_get_overview_stats_aggregates_all_counts(monkeypatch):
 
 
 def test_get_brand_mention_count_delegates_to_db(monkeypatch):
-    monkeypatch.setattr(agent_chat.db, "count_mentions_by_brand", lambda brand: 42 if brand == "직방" else 0)
+    monkeypatch.setattr(agent_chat.cached_db, "count_mentions_by_brand", lambda brand: 42 if brand == "직방" else 0)
 
     assert agent_chat.get_brand_mention_count("직방") == 42
     assert agent_chat.get_brand_mention_count("없는브랜드") == 0
 
 
 def test_get_policy_source_counts_delegates_to_db(monkeypatch):
-    monkeypatch.setattr(agent_chat.db, "get_policy_source_counts", lambda: {"국토부": 5, "LH": 3})
+    monkeypatch.setattr(agent_chat.cached_db, "get_policy_source_counts", lambda: {"국토부": 5, "LH": 3})
 
     assert agent_chat.get_policy_source_counts() == {"국토부": 5, "LH": 3}
 
@@ -351,7 +379,7 @@ def test_get_briefing_highlights_returns_archived_content_when_available(monkeyp
         "total_count": 5, "channel_counts": {"네이버": 5}, "channel_top_news": {"네이버": []},
         "own_brand_news": [], "competitor_news": [], "market_news": [],
     }
-    monkeypatch.setattr(agent_chat.db, "get_briefing_archive", lambda date: archived)
+    monkeypatch.setattr(agent_chat.cached_db, "get_briefing_archive", lambda date: archived)
 
     result = agent_chat.get_briefing_highlights("2026-08-10")
 
@@ -361,8 +389,8 @@ def test_get_briefing_highlights_returns_archived_content_when_available(monkeyp
 
 
 def test_get_briefing_highlights_computes_live_when_not_yet_archived(monkeypatch):
-    monkeypatch.setattr(agent_chat.db, "get_briefing_archive", lambda date: None)
-    monkeypatch.setattr(agent_chat.db, "get_mentions_by_collected_date", lambda date: [{"id": 1}])
+    monkeypatch.setattr(agent_chat.cached_db, "get_briefing_archive", lambda date: None)
+    monkeypatch.setattr(agent_chat.cached_db, "get_mentions_by_collected_date", lambda date: [{"id": 1}])
     monkeypatch.setattr(agent_chat.news_feed, "own_brand_names", lambda: {"프롭티어"})
     monkeypatch.setattr(agent_chat.news_feed, "competitor_brand_names", lambda: {"직방"})
     monkeypatch.setattr(agent_chat.news_feed, "market_brand_names", lambda: {"AI"})
@@ -382,23 +410,23 @@ def test_get_briefing_highlights_computes_live_when_not_yet_archived(monkeypatch
 
 
 def test_get_briefing_highlights_returns_not_found_when_no_data_at_all(monkeypatch):
-    monkeypatch.setattr(agent_chat.db, "get_briefing_archive", lambda date: None)
-    monkeypatch.setattr(agent_chat.db, "get_mentions_by_collected_date", lambda date: [])
+    monkeypatch.setattr(agent_chat.cached_db, "get_briefing_archive", lambda date: None)
+    monkeypatch.setattr(agent_chat.cached_db, "get_mentions_by_collected_date", lambda date: [])
 
     assert agent_chat.get_briefing_highlights("2026-01-01") == {"found": False}
 
 
 def test_get_collection_health_reports_last_batch_per_channel_group(monkeypatch):
     def fake_run_batches(limit, channels):
-        if channels == ["네이버", "구글", "다음", "커뮤니티"]:
+        if channels == ("네이버", "구글", "다음", "커뮤니티"):
             return [{"ran_at": "2026-08-14 09:00:00", "trigger": "자동", "ok": 1, "message": ""}]
-        if channels == ["매경API"]:
+        if channels == ("매경API",):
             return [{"ran_at": "2026-08-14 08:00:00", "trigger": "수동", "ok": 0, "message": "오류"}]
         return []
 
-    monkeypatch.setattr(agent_chat.db, "get_run_batches", fake_run_batches)
+    monkeypatch.setattr(agent_chat.cached_db, "get_run_batches", fake_run_batches)
     monkeypatch.setattr(
-        agent_chat.db, "get_policy_run_batches",
+        agent_chat.cached_db, "get_policy_run_batches",
         lambda limit: [{"ran_at": "2026-08-14 07:00:00", "trigger": "자동", "ok": 1, "message": ""}],
     )
 
@@ -413,7 +441,7 @@ def test_get_collection_health_reports_last_batch_per_channel_group(monkeypatch)
 
 def test_compare_brand_mentions_returns_count_per_brand(monkeypatch):
     counts = {"직방": 42, "프롭티어": 7}
-    monkeypatch.setattr(agent_chat.db, "count_mentions_by_brand_since", lambda brand, days: counts[brand])
+    monkeypatch.setattr(agent_chat.cached_db, "count_mentions_by_brand_since", lambda brand, days: counts[brand])
 
     result = agent_chat.compare_brand_mentions(["직방", "프롭티어"], days=30)
 
@@ -421,10 +449,10 @@ def test_compare_brand_mentions_returns_count_per_brand(monkeypatch):
 
 
 def test_get_vectorization_status_aggregates_counts(monkeypatch):
-    monkeypatch.setattr(agent_chat.db, "count_mentions", lambda: 100)
-    monkeypatch.setattr(agent_chat.db, "count_mentions_without_embedding", lambda: 10)
-    monkeypatch.setattr(agent_chat.db, "count_policy_events", lambda: 50)
-    monkeypatch.setattr(agent_chat.db, "count_policy_events_without_embedding", lambda: 2)
+    monkeypatch.setattr(agent_chat.cached_db, "count_mentions", lambda: 100)
+    monkeypatch.setattr(agent_chat.cached_db, "count_mentions_without_embedding", lambda: 10)
+    monkeypatch.setattr(agent_chat.cached_db, "count_policy_events", lambda: 50)
+    monkeypatch.setattr(agent_chat.cached_db, "count_policy_events_without_embedding", lambda: 2)
 
     assert agent_chat.get_vectorization_status() == {
         "mentions_total": 100, "mentions_pending": 10,
@@ -434,7 +462,7 @@ def test_get_vectorization_status_aggregates_counts(monkeypatch):
 
 def test_get_top_mentioned_brands_delegates_to_db(monkeypatch):
     ranked = [{"brand": "직방", "count": 10}, {"brand": "다방", "count": 3}]
-    monkeypatch.setattr(agent_chat.db, "get_top_mentioned_brands", lambda days, limit: ranked)
+    monkeypatch.setattr(agent_chat.cached_db, "get_top_mentioned_brands", lambda days, limit: ranked)
 
     assert agent_chat.get_top_mentioned_brands(days=30, limit=5) == ranked
 
@@ -444,7 +472,7 @@ def test_get_news_category_counts_aggregates_across_mentions(monkeypatch):
         {"title": "직방 AI 매물 추천 출시", "snippet": ""},
         {"title": "다방 신규 서비스 출시", "snippet": "AI 기반"},
     ]
-    monkeypatch.setattr(agent_chat.db, "get_mentions_since", lambda days: mentions)
+    monkeypatch.setattr(agent_chat.cached_db, "get_mentions_since", lambda days: mentions)
 
     counts = agent_chat.get_news_category_counts(days=30)
 
@@ -457,7 +485,7 @@ def test_get_policy_category_counts_aggregates_across_events(monkeypatch):
         {"title": "임대주택 지원 사업 공고"},
         {"title": "주택 통계 조사 결과 발표"},
     ]
-    monkeypatch.setattr(agent_chat.db, "get_policy_events_since", lambda days: events)
+    monkeypatch.setattr(agent_chat.cached_db, "get_policy_events_since", lambda days: events)
 
     counts = agent_chat.get_policy_category_counts(days=30)
 
@@ -469,7 +497,7 @@ def test_compare_collection_periods_computes_change_and_percentage(monkeypatch):
     def fake_between(start, end):
         return {(7, 0): 30, (14, 7): 20}[(start, end)]
 
-    monkeypatch.setattr(agent_chat.db, "count_mentions_between", fake_between)
+    monkeypatch.setattr(agent_chat.cached_db, "count_mentions_between", fake_between)
 
     result = agent_chat.compare_collection_periods(period_days=7)
 
@@ -480,7 +508,7 @@ def test_compare_collection_periods_computes_change_and_percentage(monkeypatch):
 
 
 def test_compare_collection_periods_handles_zero_previous_period(monkeypatch):
-    monkeypatch.setattr(agent_chat.db, "count_mentions_between", lambda start, end: 0)
+    monkeypatch.setattr(agent_chat.cached_db, "count_mentions_between", lambda start, end: 0)
 
     result = agent_chat.compare_collection_periods(period_days=7)
 
@@ -488,7 +516,7 @@ def test_compare_collection_periods_handles_zero_previous_period(monkeypatch):
 
 
 def test_get_api_cost_summary_computes_estimated_cost_per_feature(monkeypatch):
-    monkeypatch.setattr(agent_chat.db, "get_api_usage_summary", lambda days: {
+    monkeypatch.setattr(agent_chat.cached_db, "get_api_usage_summary", lambda days: {
         "summarizer": {"calls": 2, "prompt_tokens": 1_000_000, "output_tokens": 0, "tokens": 1_000_000, "failed": 0},
         "agent_chat": {"calls": 1, "prompt_tokens": 0, "output_tokens": 1_000_000, "tokens": 1_000_000, "failed": 1},
     })
@@ -503,7 +531,7 @@ def test_get_api_cost_summary_computes_estimated_cost_per_feature(monkeypatch):
 
 
 def test_get_api_cost_summary_returns_zero_totals_when_no_usage(monkeypatch):
-    monkeypatch.setattr(agent_chat.db, "get_api_usage_summary", lambda days: {})
+    monkeypatch.setattr(agent_chat.cached_db, "get_api_usage_summary", lambda days: {})
 
     result = agent_chat.get_api_cost_summary(days=30)
 
@@ -529,7 +557,7 @@ def test_get_tracked_brands_groups_by_role(monkeypatch):
 
 def test_get_pdf_report_stats_delegates_to_db(monkeypatch):
     monkeypatch.setattr(
-        agent_chat.db, "count_activity_log_by_action",
+        agent_chat.cached_db, "count_activity_log_by_action",
         lambda action, days: 7 if action == "PDF 생성" else 0,
     )
 
@@ -538,6 +566,6 @@ def test_get_pdf_report_stats_delegates_to_db(monkeypatch):
 
 def test_get_top_viewed_policy_events_delegates_to_db(monkeypatch):
     top = [{"title": "제목", "source": "국토부", "view_count": 500, "announced_at": "2026-08-01"}]
-    monkeypatch.setattr(agent_chat.db, "get_top_viewed_policy_events", lambda limit: top)
+    monkeypatch.setattr(agent_chat.cached_db, "get_top_viewed_policy_events", lambda limit: top)
 
     assert agent_chat.get_top_viewed_policy_events(limit=5) == top

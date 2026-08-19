@@ -19,6 +19,7 @@ from datetime import datetime
 from google import genai
 from google.genai import types
 
+import cached_db
 import db
 import news_feed
 import policy_feed
@@ -46,6 +47,30 @@ _WEB_SEARCH_NOTE = (
 # 몇 개를 gemini-embedding-001 + sqlite-vec(L2 거리)로 실측해 정한 값 — 관련 질문은
 # 0.69~0.80대, 무관한 질문은 0.85~0.91대에 몰려 있었다.
 _INSUFFICIENT_DISTANCE_THRESHOLD = 0.83
+
+# _STATS_TOOLS(16개 지표 도구)만으로 명백히 답할 수 있는 질문 유형의 신호 키워드 —
+# 이런 질문은 벡터 검색(기사 원문 그라운딩)이 필요 없는데도 지금까지 매 메시지마다
+# 임베딩 API를 2번(뉴스/정책) 호출하고 있었다. 동시 사용자가 늘수록 이 낭비가
+# 커지므로, 명백한 경우에만 건너뛴다 — 애매하면 항상 그라운딩을 시도한다(거짓양성으로
+# API를 아끼는 것보다 거짓음성으로 근거를 놓치는 게 더 나쁘다).
+_STATS_ONLY_KEYWORDS = (
+    "몇 건", "몇건", "몇 개", "몇개", "건수", "개수",
+    "api 비용", "api비용", "비용 얼마", "얼마 썼", "얼마나 썼",
+    "벡터화 현황", "벡터화 진행률", "벡터화 얼마나", "벡터화 상태",
+    "수집 현황", "수집 상태", "실행 현황", "마지막 수집",
+    "제일 많이 언급", "가장 많이 언급", "언급 순위", "언급 비교", "언급 추이",
+    "추적하는 브랜드", "추적 브랜드", "경쟁사가 뭐", "경쟁사 목록",
+    "조회수 높은", "조회수가 높은", "조회수 순위",
+    "지난주랑 비교", "이번주랑 비교", "기간 비교",
+)
+
+
+def looks_like_stats_only_question(message: str) -> bool:
+    """지표 도구(_STATS_TOOLS)만으로 답할 수 있을 만큼 명백한 통계/집계 질문인지
+    가볍게 판별한다. 애매하면 항상 False를 반환해 벡터 검색(그라운딩)을 그대로
+    시도하게 한다."""
+    text = message.replace(" ", "")
+    return any(kw.replace(" ", "") in text for kw in _STATS_ONLY_KEYWORDS)
 
 
 def has_api_keys() -> bool:
@@ -119,7 +144,7 @@ def get_channel_counts(date: str) -> dict:
     Returns:
         채널 이름을 키로, 그 채널에서 수집된 건수를 값으로 갖는 딕셔너리.
     """
-    mentions = db.get_mentions_by_collected_date(date)
+    mentions = cached_db.get_mentions_by_collected_date(date)
     counts: dict[str, int] = {}
     for m in mentions:
         counts[m["channel"]] = counts.get(m["channel"], 0) + 1
@@ -135,11 +160,11 @@ def get_overview_stats() -> dict:
         확정된 브리핑 날짜 수(archived_briefing_days)를 담은 딕셔너리.
     """
     return {
-        "total_mentions": db.count_mentions(),
-        "total_policy_events": db.count_policy_events(),
-        "vectorized_mentions": db.count_mention_vector_index(),
-        "vectorized_policy_events": db.count_policy_vector_index(),
-        "archived_briefing_days": len(db.get_archived_briefing_dates()),
+        "total_mentions": cached_db.count_mentions(),
+        "total_policy_events": cached_db.count_policy_events(),
+        "vectorized_mentions": cached_db.count_mention_vector_index(),
+        "vectorized_policy_events": cached_db.count_policy_vector_index(),
+        "archived_briefing_days": len(cached_db.get_archived_briefing_dates()),
     }
 
 
@@ -152,7 +177,7 @@ def get_brand_mention_count(brand: str) -> int:
     Returns:
         해당 브랜드로 수집된 mentions 누적 건수.
     """
-    return db.count_mentions_by_brand(brand)
+    return cached_db.count_mentions_by_brand(brand)
 
 
 def get_policy_source_counts() -> dict:
@@ -161,7 +186,7 @@ def get_policy_source_counts() -> dict:
     Returns:
         기관명(예: "국토부", "LH", "한국부동산원")을 키로, 수집 건수를 값으로 갖는 딕셔너리.
     """
-    return db.get_policy_source_counts()
+    return cached_db.get_policy_source_counts()
 
 
 def get_briefing_highlights(date: str) -> dict:
@@ -178,9 +203,9 @@ def get_briefing_highlights(date: str) -> dict:
         "total_count": int, "channel_counts": {...}, "channel_top_news": {...},
         "own_brand_news": [...], "competitor_news": [...], "market_news": [...]}.
     """
-    content = db.get_briefing_archive(date)
+    content = cached_db.get_briefing_archive(date)
     if content is None:
-        day_mentions = db.get_mentions_by_collected_date(date)
+        day_mentions = cached_db.get_mentions_by_collected_date(date)
         if not day_mentions:
             return {"found": False}
         content = news_feed.build_briefing_archive_content(
@@ -214,14 +239,14 @@ def get_collection_health() -> dict:
         "매경API": ["매경API"],
     }
     for label, channels in channel_groups.items():
-        batches = db.get_run_batches(limit=1, channels=channels)
+        batches = cached_db.get_run_batches(limit=1, channels=tuple(channels))
         if batches:
             b = batches[0]
             result[label] = {
                 "last_run_at": b["ran_at"], "trigger": b["trigger"],
                 "ok": bool(b["ok"]), "message": b["message"],
             }
-    policy_batches = db.get_policy_run_batches(limit=1)
+    policy_batches = cached_db.get_policy_run_batches(limit=1)
     if policy_batches:
         b = policy_batches[0]
         result["정부 정책"] = {
@@ -242,7 +267,7 @@ def compare_brand_mentions(brands: list[str], days: int = 30) -> dict:
     Returns:
         브랜드명을 키로, 최근 days일간 언급 건수를 값으로 갖는 딕셔너리.
     """
-    return {brand: db.count_mentions_by_brand_since(brand, days) for brand in brands}
+    return {brand: cached_db.count_mentions_by_brand_since(brand, days) for brand in brands}
 
 
 def get_vectorization_status() -> dict:
@@ -254,10 +279,10 @@ def get_vectorization_status() -> dict:
         "policy_events_pending": int}.
     """
     return {
-        "mentions_total": db.count_mentions(),
-        "mentions_pending": db.count_mentions_without_embedding(),
-        "policy_events_total": db.count_policy_events(),
-        "policy_events_pending": db.count_policy_events_without_embedding(),
+        "mentions_total": cached_db.count_mentions(),
+        "mentions_pending": cached_db.count_mentions_without_embedding(),
+        "policy_events_total": cached_db.count_policy_events(),
+        "policy_events_pending": cached_db.count_policy_events_without_embedding(),
     }
 
 
@@ -272,7 +297,7 @@ def get_top_mentioned_brands(days: int = 30, limit: int = 5) -> list[dict]:
     Returns:
         [{"brand": str, "count": int}, ...] 언급 건수 내림차순.
     """
-    return db.get_top_mentioned_brands(days=days, limit=limit)
+    return cached_db.get_top_mentioned_brands(days=days, limit=limit)
 
 
 def get_news_category_counts(days: int = 30) -> dict:
@@ -286,7 +311,7 @@ def get_news_category_counts(days: int = 30) -> dict:
     Returns:
         카테고리명을 키로, 해당 건수를 값으로 갖는 딕셔너리.
     """
-    mentions = db.get_mentions_since(days)
+    mentions = cached_db.get_mentions_since(days)
     counts: dict[str, int] = {}
     for m in mentions:
         text = f"{m.get('title', '')} {m.get('snippet', '')}"
@@ -305,7 +330,7 @@ def get_policy_category_counts(days: int = 30) -> dict:
     Returns:
         카테고리명을 키로, 해당 건수를 값으로 갖는 딕셔너리.
     """
-    events = db.get_policy_events_since(days)
+    events = cached_db.get_policy_events_since(days)
     counts: dict[str, int] = {}
     for e in events:
         for cat in policy_feed.categorize(e.get("title", "")):
@@ -325,8 +350,8 @@ def compare_collection_periods(period_days: int = 7) -> dict:
         "count": int}, "change": int, "change_pct": float | None} — change_pct는 직전
         구간이 0건이면 계산 불가능하므로 None.
     """
-    recent = db.count_mentions_between(period_days, 0)
-    previous = db.count_mentions_between(period_days * 2, period_days)
+    recent = cached_db.count_mentions_between(period_days, 0)
+    previous = cached_db.count_mentions_between(period_days * 2, period_days)
     change = recent - previous
     change_pct = round((change / previous) * 100, 1) if previous else None
     return {
@@ -357,7 +382,7 @@ def get_api_cost_summary(days: int = 30) -> dict:
         "estimated_cost_usd": float}}, "total_calls": int, "total_tokens": int,
         "total_estimated_cost_usd": float}
     """
-    summary = db.get_api_usage_summary(days=days)
+    summary = cached_db.get_api_usage_summary(days=days)
     by_feature = {}
     total_cost = 0.0
     total_calls = 0
@@ -408,7 +433,7 @@ def get_pdf_report_stats(days: int = 30) -> dict:
     Returns:
         {"count": int}
     """
-    return {"count": db.count_activity_log_by_action("PDF 생성", days=days)}
+    return {"count": cached_db.count_activity_log_by_action("PDF 생성", days=days)}
 
 
 def get_top_viewed_policy_events(limit: int = 5) -> list[dict]:
@@ -421,7 +446,7 @@ def get_top_viewed_policy_events(limit: int = 5) -> list[dict]:
         [{"title": str, "source": str, "view_count": int, "announced_at": str}, ...]
         조회수 내림차순.
     """
-    return db.get_top_viewed_policy_events(limit=limit)
+    return cached_db.get_top_viewed_policy_events(limit=limit)
 
 
 _STATS_TOOLS = [

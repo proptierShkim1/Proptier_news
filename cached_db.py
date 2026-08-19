@@ -38,9 +38,129 @@ def count_policy_events() -> int:
     return db.count_policy_events()
 
 
+# ── AI AGENT 지표 도구용 캐시 ─────────────────────────────────────────────
+# agent_chat.py의 _STATS_TOOLS는 매 채팅 메시지마다 그대로 db.py를 조회했는데,
+# 동시에 여러 사용자가 비슷한 질문("오늘 몇 건 수집됐어?" 등)을 하면 그만큼 DB 재조회가
+# 반복된다. 도구 함수 자체는 Gemini가 시그니처/독스트링을 그대로 읽어 스키마를 만드므로
+# 손대지 않고, 그 안에서 부르는 db.* 호출만 여기 캐시로 바꿔치기한다.
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_mentions_by_collected_date(date: str) -> list[dict]:
+    return db.get_mentions_by_collected_date(date)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def count_mention_vector_index() -> int:
+    return db.count_mention_vector_index()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def count_policy_vector_index() -> int:
+    return db.count_policy_vector_index()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_archived_briefing_dates() -> set:
+    return db.get_archived_briefing_dates()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def count_mentions_by_brand(brand: str) -> int:
+    return db.count_mentions_by_brand(brand)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_policy_source_counts() -> dict:
+    return db.get_policy_source_counts()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_briefing_archive(date: str):
+    return db.get_briefing_archive(date)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_run_batches(limit: int, channels: tuple | None = None) -> list[dict]:
+    return db.get_run_batches(limit=limit, channels=list(channels) if channels is not None else None)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_policy_run_batches(limit: int) -> list[dict]:
+    return db.get_policy_run_batches(limit=limit)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def count_mentions_by_brand_since(brand: str, days: int) -> int:
+    return db.count_mentions_by_brand_since(brand, days)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def count_mentions_without_embedding() -> int:
+    return db.count_mentions_without_embedding()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def count_policy_events_without_embedding() -> int:
+    return db.count_policy_events_without_embedding()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_top_mentioned_brands(days: int, limit: int) -> list[dict]:
+    return db.get_top_mentioned_brands(days=days, limit=limit)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_mentions_since(days: int) -> list[dict]:
+    return db.get_mentions_since(days)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_policy_events_since(days: int) -> list[dict]:
+    return db.get_policy_events_since(days)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def count_mentions_between(start_days_ago: int, end_days_ago: int) -> int:
+    return db.count_mentions_between(start_days_ago, end_days_ago)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_api_usage_summary(days: int) -> dict:
+    return db.get_api_usage_summary(days=days)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def count_activity_log_by_action(action: str, days: int) -> int:
+    return db.count_activity_log_by_action(action, days=days)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_top_viewed_policy_events(limit: int) -> list[dict]:
+    return db.get_top_viewed_policy_events(limit=limit)
+
+
 def clear() -> None:
     """관리자가 데이터를 수정한 뒤(삭제·백필·재수집 등) 호출해 캐시를 즉시 무효화한다."""
     get_mentions.clear()
     get_policy_events.clear()
     count_mentions.clear()
     count_policy_events.clear()
+    get_mentions_by_collected_date.clear()
+    count_mention_vector_index.clear()
+    count_policy_vector_index.clear()
+    get_archived_briefing_dates.clear()
+    count_mentions_by_brand.clear()
+    get_policy_source_counts.clear()
+    get_briefing_archive.clear()
+    get_run_batches.clear()
+    get_policy_run_batches.clear()
+    count_mentions_by_brand_since.clear()
+    count_mentions_without_embedding.clear()
+    count_policy_events_without_embedding.clear()
+    get_top_mentioned_brands.clear()
+    get_mentions_since.clear()
+    get_policy_events_since.clear()
+    count_mentions_between.clear()
+    get_api_usage_summary.clear()
+    count_activity_log_by_action.clear()
+    get_top_viewed_policy_events.clear()
