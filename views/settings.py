@@ -54,7 +54,8 @@ _SFTP_SKIP       = {"__pycache__", ".git", "venv"}
 # scheduler.log/vector_backups 등이 배포 때마다 서버 것을 덮어쓰고 있었다(로컬 pytest
 # 실행 흔적이 서버 로그에 섞여 있던 원인).
 _DATA_UPLOAD_SKIP = {
-    "news.db", "access_config.json", "keywords.json", "collection_schedule.json",
+    "news.db", "news.db-wal", "news.db-shm", "access_config.json", "keywords.json",
+    "collection_schedule.json",
     "policy_collection_schedule.json", "naver_news_collection_schedule.json",
     "mk_news_collection_schedule.json", "vector_collection_schedule.json",
     "channel_visibility.json", "agent_chat_history.json", "deploy_log.jsonl",
