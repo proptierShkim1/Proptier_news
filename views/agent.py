@@ -33,9 +33,14 @@ def render():
         return
 
     client_ip = st.session_state.get("_client_ip", "")
+    # 채팅 이력은 접속 IP가 아니라 브라우저별 영구 식별자(_client_uid, app.py에서 쿠키로
+    # 발급)로 구분한다 — 사내망 특성상 여러 사람이 같은 IP를 공유하거나 한 사람의 IP가
+    # DHCP로 바뀌는 상황에서도 대화가 섞이거나 끊기지 않게 하기 위함. 활동 로그(누가/언제
+    # 접속했는지)는 여전히 IP 기준이라 client_ip를 그대로 쓴다.
+    client_uid = st.session_state.get("_client_uid", "")
 
     if "agent_chat_sessions" not in st.session_state:
-        sessions = utils.load_agent_chat_sessions(client_ip)
+        sessions = db.get_agent_chat_sessions(client_uid)
         if not sessions:
             sessions = [{"started_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "messages": []}]
         st.session_state["agent_chat_sessions"] = sessions
@@ -53,8 +58,10 @@ def render():
 
     if is_current and st.button("\U0001F504 새 대화 시작"):
         if sessions[-1]["messages"]:
+            # 새 세션은 메시지가 생기기 전까지 DB에 쓸 게 없다 — 첫 메시지가
+            # append_agent_chat_message()로 저장될 때 이 started_at으로 자연스럽게
+            # 새 세션이 생긴다.
             sessions.append({"started_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "messages": []})
-            utils.save_agent_chat_sessions(client_ip, sessions)
         st.rerun()
 
     viewed = sessions[picked_idx]
@@ -73,11 +80,13 @@ def render():
                     with st.spinner("웹 검색 중..."):
                         web_reply = agent_chat.ask_with_web_search(viewed["messages"][:idx - 1], question)
                     turn["web_search_done"] = True
-                    viewed["messages"].append({
-                        "role": "assistant",
-                        "content": f"\U0001F310 **웹 검색 기반 답변**\n\n{web_reply}",
-                    })
-                    utils.save_agent_chat_sessions(client_ip, sessions)
+                    if turn.get("id") is not None:
+                        db.mark_agent_chat_message_web_search_done(turn["id"])
+                    web_content = f"\U0001F310 **웹 검색 기반 답변**\n\n{web_reply}"
+                    new_id = db.append_agent_chat_message(
+                        client_uid, viewed["started_at"], "assistant", web_content,
+                    )
+                    viewed["messages"].append({"id": new_id, "role": "assistant", "content": web_content})
                     st.rerun()
 
     if is_current:
@@ -104,12 +113,15 @@ def render():
                     reply = agent_chat.ask(history, user_input, context=context)
                 st.markdown(reply)
 
-            assistant_turn = {"role": "assistant", "content": reply}
+            user_id = db.append_agent_chat_message(client_uid, viewed["started_at"], "user", user_input)
+            assistant_id = db.append_agent_chat_message(
+                client_uid, viewed["started_at"], "assistant", reply, insufficient=not sufficient,
+            )
+            assistant_turn = {"id": assistant_id, "role": "assistant", "content": reply}
             if not sufficient:
                 assistant_turn["insufficient"] = True
-            history.append({"role": "user", "content": user_input})
+            history.append({"id": user_id, "role": "user", "content": user_input})
             history.append(assistant_turn)
-            utils.save_agent_chat_sessions(client_ip, sessions)
             st.rerun()
     else:
         st.info("지난 대화를 보고 있어요 · 이어서 얘기하려면 위에서 '현재 대화'를 선택하세요.")

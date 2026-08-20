@@ -1,6 +1,4 @@
 import json
-import threading
-import time
 from datetime import datetime
 
 from utils import (
@@ -212,90 +210,5 @@ def test_load_agent_settings_backfills_missing_key_from_old_file(tmp_path, monke
     assert utils.load_agent_settings() == {"always_show_hybrid_search": False}
 
 
-def test_load_agent_chat_sessions_defaults_to_empty_list_when_missing(tmp_path, monkeypatch):
-    monkeypatch.setattr(utils, "AGENT_CHAT_HISTORY_FILE", tmp_path / "agent_chat_history.json")
-
-    assert utils.load_agent_chat_sessions("192.168.1.1") == []
-
-
-def test_save_and_load_agent_chat_sessions_roundtrips_for_given_ip(tmp_path, monkeypatch):
-    monkeypatch.setattr(utils, "AGENT_CHAT_HISTORY_FILE", tmp_path / "agent_chat_history.json")
-    sessions = [
-        {"started_at": "2026-08-06 09:00", "messages": [{"role": "user", "content": "안녕"}]},
-        {"started_at": "2026-08-06 10:00", "messages": [{"role": "assistant", "content": "안녕하세요!"}]},
-    ]
-
-    utils.save_agent_chat_sessions("192.168.1.1", sessions)
-
-    assert utils.load_agent_chat_sessions("192.168.1.1") == sessions
-
-
-def test_agent_chat_sessions_are_isolated_per_ip(tmp_path, monkeypatch):
-    monkeypatch.setattr(utils, "AGENT_CHAT_HISTORY_FILE", tmp_path / "agent_chat_history.json")
-    ip1_sessions = [{"started_at": "", "messages": [{"role": "user", "content": "IP1 메시지"}]}]
-    ip2_sessions = [{"started_at": "", "messages": [{"role": "user", "content": "IP2 메시지"}]}]
-
-    utils.save_agent_chat_sessions("192.168.1.1", ip1_sessions)
-    utils.save_agent_chat_sessions("192.168.1.2", ip2_sessions)
-
-    assert utils.load_agent_chat_sessions("192.168.1.1") == ip1_sessions
-    assert utils.load_agent_chat_sessions("192.168.1.2") == ip2_sessions
-
-
-def test_load_agent_chat_sessions_returns_empty_list_for_blank_ip(tmp_path, monkeypatch):
-    monkeypatch.setattr(utils, "AGENT_CHAT_HISTORY_FILE", tmp_path / "agent_chat_history.json")
-
-    assert utils.load_agent_chat_sessions("") == []
-
-
-def test_save_agent_chat_sessions_does_nothing_for_blank_ip(tmp_path, monkeypatch):
-    history_file = tmp_path / "agent_chat_history.json"
-    monkeypatch.setattr(utils, "AGENT_CHAT_HISTORY_FILE", history_file)
-
-    utils.save_agent_chat_sessions("", [{"started_at": "", "messages": [{"role": "user", "content": "무시되어야 함"}]}])
-
-    assert not history_file.exists()
-
-
-def test_save_agent_chat_sessions_concurrent_writes_do_not_lose_data(tmp_path, monkeypatch):
-    """read-entire-file -> mutate -> write-entire-file 패턴은 두 IP가 거의 동시에 저장하면
-    한쪽의 저장이 다른 쪽에 덮어써질 수 있다 — save_json을 느리게 만들어 그 read-write
-    사이 창을 넓히면 락 없이는 재현되고, 임계구역 전체를 락으로 감싸면 재현되지 않아야 한다."""
-    history_file = tmp_path / "agent_chat_history.json"
-    monkeypatch.setattr(utils, "AGENT_CHAT_HISTORY_FILE", history_file)
-
-    original_save_json = utils.save_json
-
-    def slow_save_json(path, data):
-        time.sleep(0.05)
-        original_save_json(path, data)
-
-    monkeypatch.setattr(utils, "save_json", slow_save_json)
-
-    ips = [f"1.1.1.{i}" for i in range(8)]
-
-    def worker(ip):
-        utils.save_agent_chat_sessions(ip, [{"started_at": "", "messages": [{"role": "user", "content": ip}]}])
-
-    threads = [threading.Thread(target=worker, args=(ip,)) for ip in ips]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-
-    saved = utils.load_json(history_file, {})
-    assert set(saved.keys()) == set(ips)
-
-
-def test_load_agent_chat_sessions_migrates_old_flat_message_list_format(tmp_path, monkeypatch):
-    """초기 버전은 IP당 메시지 리스트를 그대로 저장했다 — 기존 파일이 남아있어도 깨지지
-    않고 진행 중인 대화 하나로 마이그레이션되는지 확인."""
-    history_file = tmp_path / "agent_chat_history.json"
-    monkeypatch.setattr(utils, "AGENT_CHAT_HISTORY_FILE", history_file)
-    old_format = {"192.168.1.1": [{"role": "user", "content": "옛 형식 메시지"}]}
-    history_file.write_text(json.dumps(old_format, ensure_ascii=False), encoding="utf-8")
-
-    sessions = utils.load_agent_chat_sessions("192.168.1.1")
-
-    assert len(sessions) == 1
-    assert sessions[0]["messages"] == [{"role": "user", "content": "옛 형식 메시지"}]
+# AI AGENT 채팅 기록은 db.py의 agent_chat_messages 테이블(메시지 1건 = 1행)로 옮겨졌다 —
+# 이 파일 기반 API 테스트들은 tests/test_db.py의 agent_chat 관련 테스트로 대체되었다.

@@ -5,6 +5,7 @@ hana_p — SQLite 저장소 (수집 데이터 + 실행 이력)
 import json
 import shutil
 import sqlite3
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -153,6 +154,18 @@ CREATE TABLE IF NOT EXISTS api_usage_log (
 );
 """
 
+_AGENT_CHAT_MESSAGES_SQL = """
+CREATE TABLE IF NOT EXISTS agent_chat_messages (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    ip                  TEXT NOT NULL,
+    session_started_at  TEXT NOT NULL,
+    role                TEXT NOT NULL,
+    content             TEXT NOT NULL,
+    insufficient        INTEGER NOT NULL DEFAULT 0,
+    web_search_done     INTEGER NOT NULL DEFAULT 0
+);
+"""
+
 _BRIEFING_ARCHIVES_SQL = """
 CREATE TABLE IF NOT EXISTS briefing_archives (
     date              TEXT PRIMARY KEY,
@@ -200,7 +213,29 @@ def _coerce_ints(rows: list[dict], *fields: str) -> list[dict]:
     return rows
 
 
+_init_db_lock = threading.Lock()
+_init_db_running = False
+
+
 def init_db() -> None:
+    # migrate_agent_chat_history_json()가 append_agent_chat_message()를 거쳐 다시
+    # init_db()를 호출하므로, 재진입 시 스키마 준비/마이그레이션을 건너뛰는 가드가 없으면
+    # "파일이 아직 안 지워졌으니 또 마이그레이션 → 그 안에서 또 init_db → 또 마이그레이션"
+    # 식으로 무한 재귀에 빠진다. 이미 바깥쪽 호출이 진행 중이면 스키마는 이미 보장된
+    # 상태이므로 조용히 반환한다.
+    global _init_db_running
+    with _init_db_lock:
+        if _init_db_running:
+            return
+        _init_db_running = True
+    try:
+        _init_db_impl()
+    finally:
+        with _init_db_lock:
+            _init_db_running = False
+
+
+def _init_db_impl() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     # app.py가 매 스크립트 재실행(rerun)마다 맨 앞에서 init_db()를 부르는데, 여기서
     # 예외가 나면 스케줄러(start_scheduler_thread)가 아예 시작되지 못한다 — 즉 10분
@@ -224,12 +259,15 @@ def init_db() -> None:
         con.execute(_ACTIVITY_LOG_SQL)
         con.execute(_API_USAGE_LOG_SQL)
         con.execute(_BRIEFING_ARCHIVES_SQL)
+        con.execute(_AGENT_CHAT_MESSAGES_SQL)
         con.execute(_mention_vectors_sql())
         con.execute(_policy_vectors_sql())
         _ensure_column(con, "mentions", "summary", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(con, "mentions", "embedding", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(con, "policy_events", "embedding", "TEXT NOT NULL DEFAULT ''")
         con.execute("CREATE INDEX IF NOT EXISTS idx_mentions_collected_at ON mentions(collected_at)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_agent_chat_messages_ip ON agent_chat_messages(ip)")
+    migrate_agent_chat_history_json(DB_PATH.parent / "agent_chat_history.json")
 
 
 def insert_mention(record: dict) -> bool:
@@ -775,6 +813,112 @@ def count_activity_log() -> int:
     init_db()
     with _connect() as con:
         return con.execute("SELECT COUNT(*) FROM activity_log").fetchone()[0]
+
+
+def append_agent_chat_message(
+    ip: str, session_started_at: str, role: str, content: str,
+    insufficient: bool = False, web_search_done: bool = False,
+) -> int:
+    """AI AGENT 대화 메시지 1건을 추가하고 새로 생성된 행의 id를 반환한다. 메시지마다
+    독립된 INSERT라 서로 다른 IP의 저장 요청이 기다릴 이유가 없다 — 기존 "IP별 전체
+    대화를 JSON 파일 하나에 통째로 읽고 다시 쓰기" 방식은 사용자가 늘수록 전역 락
+    경합이 커지는 병목이었다. 반환된 id는 이후 이 메시지에 Hybrid Search를 실행했을 때
+    mark_agent_chat_message_web_search_done()으로 갱신하는 데 쓴다."""
+    init_db()
+    with _connect() as con:
+        cursor = con.execute(
+            "INSERT INTO agent_chat_messages "
+            "(ip, session_started_at, role, content, insufficient, web_search_done) "
+            "VALUES (:ip, :session_started_at, :role, :content, :insufficient, :web_search_done)",
+            {
+                "ip": ip, "session_started_at": session_started_at, "role": role,
+                "content": content, "insufficient": int(insufficient),
+                "web_search_done": int(web_search_done),
+            },
+        )
+        return cursor.lastrowid
+
+
+def mark_agent_chat_message_web_search_done(message_id: int) -> None:
+    """Hybrid Search를 실행한 메시지 하나만 web_search_done=1로 갱신해, 새로고침 후에도
+    같은 턴에 Hybrid Search 버튼이 다시 뜨지 않게 한다."""
+    init_db()
+    with _connect() as con:
+        con.execute(
+            "UPDATE agent_chat_messages SET web_search_done = 1 WHERE id = :id",
+            {"id": message_id},
+        )
+
+
+def get_agent_chat_sessions(ip: str) -> list[dict]:
+    """ip의 전체 대화를 session_started_at 기준으로 묶어 반환한다. 각 세션의 messages는
+    id(입력 순서) 순으로 정렬되며, 세션 자체도 처음 등장한 순서(가장 오래된 대화부터)로
+    나열된다 — 기존 파일 기반 저장의 반환 형식과 동일하게 맞춰 views/agent.py가 그대로
+    쓸 수 있게 한다."""
+    init_db()
+    with _connect() as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT id, session_started_at, role, content, insufficient, web_search_done "
+            "FROM agent_chat_messages WHERE ip = :ip ORDER BY id ASC",
+            {"ip": ip},
+        ).fetchall()
+
+    sessions: list[dict] = []
+    sessions_by_started_at: dict[str, dict] = {}
+    for row in rows:
+        started_at = row["session_started_at"]
+        session = sessions_by_started_at.get(started_at)
+        if session is None:
+            session = {"started_at": started_at, "messages": []}
+            sessions_by_started_at[started_at] = session
+            sessions.append(session)
+        session["messages"].append({
+            "id": row["id"],
+            "role": row["role"],
+            "content": row["content"],
+            "insufficient": bool(row["insufficient"]),
+            "web_search_done": bool(row["web_search_done"]),
+        })
+    return sessions
+
+
+_chat_migration_lock = threading.Lock()
+_chat_migration_running = False
+
+
+def migrate_agent_chat_history_json(path: Path) -> None:
+    """기존 파일 기반(JSON) AI AGENT 대화 기록을 agent_chat_messages 테이블로 1회
+    이전한다. 이전 완료 후 원본 파일을 지우지 않고 `.json.migrated`로 이름만 바꿔
+    남겨둔다 — 이전 도중 문제가 있었는지 나중에 대조할 수 있게. 파일이 없으면(이미
+    이전했거나 처음부터 기록이 없던 경우) 조용히 아무 것도 하지 않는다.
+
+    append_agent_chat_message()가 내부에서 init_db()를 다시 부르고, init_db()는 이
+    함수를 한 번 더 부른다(재부팅 시점에 자동으로 이전되도록) — 재진입 가드가 없으면
+    이전 중인 파일을 다시 읽어 메시지를 중복 삽입하게 된다. 이미 이전이 진행 중이면
+    조용히 반환한다."""
+    global _chat_migration_running
+    with _chat_migration_lock:
+        if _chat_migration_running:
+            return
+        _chat_migration_running = True
+    try:
+        if not path.exists():
+            return
+        all_sessions = json.loads(path.read_text(encoding="utf-8"))
+        for ip, sessions in all_sessions.items():
+            for session in sessions:
+                started_at = session.get("started_at") or ""
+                for message in session.get("messages", []):
+                    append_agent_chat_message(
+                        ip, started_at, message["role"], message["content"],
+                        insufficient=bool(message.get("insufficient")),
+                        web_search_done=bool(message.get("web_search_done")),
+                    )
+        path.rename(path.with_suffix(".json.migrated"))
+    finally:
+        with _chat_migration_lock:
+            _chat_migration_running = False
 
 
 def distinct_activity_ips() -> list[str]:

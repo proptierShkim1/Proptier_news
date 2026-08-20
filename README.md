@@ -166,20 +166,35 @@ summarizer.py와 같은 `.env`의 `GEMINI_API_KEYS`/`GEMINI_MODEL`을 재사용�
   client has been closed" 오류가 나는 걸 실제로 확인했다 — Streamlit이 재실행마다 다른 스레드에서
   스크립트를 돌릴 수 있어서인 것으로 보임. 매번 새로 만들면 이 문제가 없고, 여러 키로
   failover하기도 더 쉽다.
-- **대화 이력은 `st.session_state`가 아니라 접속 IP 기준 파일(`data/agent_chat_history.json`)에
-  저장한다.** 이 앱은 로그인이 없고 IP 기반 접근 제어만 있어서, IP를 기존 `access_control.py`와
-  같은 방식의 사용자 식별 키로 재사용했다. F5 새로고침이나 다른 탭 이동으로 브라우저 세션이
-  끊겨도(Streamlit의 session_state는 이때 초기화됨) "대화 초기화" 버튼을 누르기 전까지 대화가
-  이어진다.
-- **대화는 IP당 세션 목록으로 저장되어 지난 대화를 나중에 다시 볼 수 있다.** "새 대화 시작"을
+- **대화 이력은 `st.session_state`가 아니라 브라우저별 영구 식별자(`_client_uid`) 기준으로
+  DB(`db.agent_chat_messages` 테이블, 메시지 1건 = 1행)에 저장한다.** F5 새로고침이나 다른 탭
+  이동으로 브라우저 세션이 끊겨도(Streamlit의 session_state는 이때 초기화됨) "대화 초기화" 버튼을
+  누르기 전까지 대화가 이어진다.
+- **대화는 브라우저별 세션 목록으로 저장되어 지난 대화를 나중에 다시 볼 수 있다.** "새 대화 시작"을
   누르면 진행 중이던 대화를 지우지 않고 목록에 보존한 뒤 새 세션을 시작한다. 화면 상단의
   "🗂️ 지난 대화" 셀렉트박스로 과거 세션을 골라 읽기 전용으로 다시 볼 수 있고(입력창은 숨김),
-  "🟢 현재 대화"를 고르면 이어서 채팅할 수 있다. 세션 분리 이전(초기 버전)에 저장된 옛 형식
-  파일도 진행 중인 대화 하나로 자동 마이그레이션한다(`utils.load_agent_chat_sessions`).
-- **`save_agent_chat_sessions`는 파일 전체를 읽고 → IP 하나만 고쳐서 → 파일 전체를 다시 쓰는
-  방식이라, 서로 다른 사용자가 거의 동시에 채팅하면 락 없이는 한쪽의 저장이 다른 쪽 걸 덮어써
-  유실될 수 있었다.** 프로세스 전역 `threading.Lock()`으로 읽기~쓰기 구간 전체를 감싸 직렬화해
-  해결했다.
+  "🟢 현재 대화"를 고르면 이어서 채팅할 수 있다.
+- **원래는 접속 IP를 사용자 식별 키로 쓰고, IP별 전체 대화를 JSON 파일 하나에 통째로 읽고 다시
+  쓰는 방식이었다(`data/agent_chat_history.json`).** 100명 이상 동시 사용을 준비하며 2026-08-20에
+  두 가지를 함께 바꿨다:
+  1) **저장 방식** — 서로 다른 사용자가 거의 동시에 채팅할 때마다 파일 전체를 다시 쓰는 전역 락
+     뒤에서 저장이 줄을 서는 게 병목이었다. 메시지 1건 = 1행짜리 DB 테이블
+     (`db.append_agent_chat_message` / `db.get_agent_chat_sessions`)로 옮겨 각 저장이 독립된
+     INSERT가 되도록 바꿨다. 기존 JSON 파일은 `db.migrate_agent_chat_history_json()`이
+     `init_db()` 안에서 최초 1회 자동으로 읽어들여 이전하고, 원본은 `.json.migrated`로 이름만
+     바꿔 보존한다.
+  2) **사용자 식별 키** — 로그인이 없는 내부망 도구라 접속 IP를 식별자로 재사용했는데, 사내망
+     특성상 여러 사람이 같은 IP를 공유하거나(공유기/게이트웨이) DHCP로 한 사람의 IP가 바뀔 수
+     있어 대화가 섞이거나 끊길 위험이 있었다. `app.py`의 `_get_or_create_client_uid()`가
+     브라우저별 영구 쿠키(`hana_p_uid`)를 발급해 그 값을 식별 키로 쓴다 — `st.context.cookies`
+     (읽기 전용)로 기존 쿠키를 확인하고, 없으면 서버에서 `uuid.uuid4()`로 새로 만들어 이번
+     요청에 즉시 쓰면서 `st.components.v1.html`에 심은 JS로 브라우저에 쿠키를 저장한다. 처음엔
+     URL 쿼리파라미터 + 페이지 리다이렉트 방식(JS로 쿠키를 만들고 `window.parent.location`을
+     바꿔 같은 URL에 `?uid=...`를 붙이는 방식)을 시도했는데, Streamlit이 컴포넌트 iframe에 심는
+     `sandbox` 속성에 `allow-top-navigation`이 없어 최상위 프레임 이동이 브라우저에서 조용히
+     막히는 걸 Playwright로 콘솔 에러까지 직접 확인하고 폐기했다 — `document.cookie` 쓰기는
+     `allow-same-origin`만으로 막히지 않아 지금 방식으로 바꿨다. 활동 로그(`db.log_activity`)는
+     여전히 접속 IP 기준이다 — "누가/언제 접속했는지"라는 감사 목적에는 IP가 더 자연스럽다.
 - **사내 데이터로 답하기 어려운 질문은 opt-in Hybrid Search(웹 검색) 답변을 추가로 제공한다.**
   벡터 검색 결과 중 가장 가까운(distance가 가장 작은) 항목이 임계값(`agent_chat._INSUFFICIENT_DISTANCE_THRESHOLD=0.83`,
   실제 관련/무관 질문 여러 개로 실측해 정함 — 관련 질문은 0.69~0.80대, 무관한 질문은 0.85~0.91대에

@@ -991,4 +991,145 @@ def test_init_db_does_not_touch_healthy_db(tmp_path, monkeypatch):
     db.init_db()
 
     assert db.count_mentions() == 1
+
+
+def test_get_agent_chat_sessions_is_empty_for_unknown_ip(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+
+    assert db.get_agent_chat_sessions("192.168.1.1") == []
+
+
+def test_append_agent_chat_message_then_get_returns_one_session_with_message(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+
+    message_id = db.append_agent_chat_message("192.168.1.1", "2026-08-20 10:00", "user", "안녕")
+
+    assert db.get_agent_chat_sessions("192.168.1.1") == [
+        {"started_at": "2026-08-20 10:00", "messages": [
+            {"id": message_id, "role": "user", "content": "안녕",
+             "insufficient": False, "web_search_done": False},
+        ]},
+    ]
+
+
+def test_append_agent_chat_message_returns_the_new_row_id(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+
+    first_id = db.append_agent_chat_message("192.168.1.1", "2026-08-20 10:00", "user", "하나")
+    second_id = db.append_agent_chat_message("192.168.1.1", "2026-08-20 10:00", "user", "둘")
+
+    assert second_id != first_id
+    assert isinstance(first_id, int)
+
+
+def test_mark_agent_chat_message_web_search_done_updates_only_that_message(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    target_id = db.append_agent_chat_message("192.168.1.1", "2026-08-20 10:00", "assistant", "답변1")
+    other_id = db.append_agent_chat_message("192.168.1.1", "2026-08-20 10:00", "assistant", "답변2")
+
+    db.mark_agent_chat_message_web_search_done(target_id)
+
+    messages = {m["id"]: m for m in db.get_agent_chat_sessions("192.168.1.1")[0]["messages"]}
+    assert messages[target_id]["web_search_done"] is True
+    assert messages[other_id]["web_search_done"] is False
+
+
+def test_append_agent_chat_message_preserves_order_within_a_session(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+
+    db.append_agent_chat_message("192.168.1.1", "2026-08-20 10:00", "user", "질문1")
+    db.append_agent_chat_message("192.168.1.1", "2026-08-20 10:00", "assistant", "답변1")
+    db.append_agent_chat_message("192.168.1.1", "2026-08-20 10:00", "user", "질문2")
+
+    sessions = db.get_agent_chat_sessions("192.168.1.1")
+
+    assert len(sessions) == 1
+    contents = [m["content"] for m in sessions[0]["messages"]]
+    assert contents == ["질문1", "답변1", "질문2"]
+
+
+def test_append_agent_chat_message_groups_into_separate_sessions_by_started_at(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+
+    db.append_agent_chat_message("192.168.1.1", "2026-08-20 09:00", "user", "지난 대화")
+    db.append_agent_chat_message("192.168.1.1", "2026-08-20 10:00", "user", "새 대화")
+
+    sessions = db.get_agent_chat_sessions("192.168.1.1")
+
+    assert [s["started_at"] for s in sessions] == ["2026-08-20 09:00", "2026-08-20 10:00"]
+    assert sessions[0]["messages"][0]["content"] == "지난 대화"
+    assert sessions[1]["messages"][0]["content"] == "새 대화"
+
+
+def test_get_agent_chat_sessions_only_returns_messages_for_that_ip(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+
+    db.append_agent_chat_message("192.168.1.1", "2026-08-20 10:00", "user", "IP1 대화")
+    db.append_agent_chat_message("192.168.1.2", "2026-08-20 10:00", "user", "IP2 대화")
+
+    assert db.get_agent_chat_sessions("192.168.1.1")[0]["messages"][0]["content"] == "IP1 대화"
+    assert db.get_agent_chat_sessions("192.168.1.2")[0]["messages"][0]["content"] == "IP2 대화"
+
+
+def test_append_agent_chat_message_stores_insufficient_and_web_search_done_flags(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+
+    db.append_agent_chat_message(
+        "192.168.1.1", "2026-08-20 10:00", "assistant", "답변", insufficient=True,
+    )
+    db.append_agent_chat_message(
+        "192.168.1.1", "2026-08-20 10:00", "assistant", "웹검색 답변", web_search_done=True,
+    )
+
+    messages = db.get_agent_chat_sessions("192.168.1.1")[0]["messages"]
+    assert messages[0]["insufficient"] is True
+    assert messages[0]["web_search_done"] is False
+    assert messages[1]["insufficient"] is False
+    assert messages[1]["web_search_done"] is True
+
+
+def test_migrate_agent_chat_history_json_imports_existing_file_once(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    history_file = tmp_path / "agent_chat_history.json"
+    history_file.write_text(
+        '{"192.168.1.1": [{"started_at": "2026-08-19 09:00", "messages": '
+        '[{"role": "user", "content": "예전 질문"}, '
+        '{"role": "assistant", "content": "예전 답변", "insufficient": true}]}]}',
+        encoding="utf-8",
+    )
+
+    db.migrate_agent_chat_history_json(history_file)
+
+    sessions = db.get_agent_chat_sessions("192.168.1.1")
+    messages = sessions[0]["messages"]
+    assert [{k: v for k, v in m.items() if k != "id"} for m in messages] == [
+        {"role": "user", "content": "예전 질문", "insufficient": False, "web_search_done": False},
+        {"role": "assistant", "content": "예전 답변", "insufficient": True, "web_search_done": False},
+    ]
+    assert not history_file.exists()
+    assert history_file.with_suffix(".json.migrated").exists()
+
+
+def test_migrate_agent_chat_history_json_is_a_noop_when_file_missing(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+
+    db.migrate_agent_chat_history_json(tmp_path / "does_not_exist.json")
+
+    assert db.get_agent_chat_sessions("192.168.1.1") == []
+
+
+def test_migrate_agent_chat_history_json_does_not_duplicate_on_second_call(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    history_file = tmp_path / "agent_chat_history.json"
+    history_file.write_text(
+        '{"192.168.1.1": [{"started_at": "2026-08-19 09:00", "messages": '
+        '[{"role": "user", "content": "예전 질문"}]}]}',
+        encoding="utf-8",
+    )
+
+    db.migrate_agent_chat_history_json(history_file)
+    db.migrate_agent_chat_history_json(history_file)  # 이미 옮겨진 뒤(파일 없음) 재호출
+
+    sessions = db.get_agent_chat_sessions("192.168.1.1")
+    assert len(sessions[0]["messages"]) == 1
     assert not list(tmp_path.glob("news.db.autofailed-*"))

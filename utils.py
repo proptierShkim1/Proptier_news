@@ -4,7 +4,6 @@ hana_p — 데이터 수집 공용 유틸리티 (키워드/스케줄 설정, 상
 
 import json
 import re
-import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -16,7 +15,6 @@ NAVER_NEWS_COLLECTION_SCHEDULE_FILE = DATA_DIR / "naver_news_collection_schedule
 MK_NEWS_COLLECTION_SCHEDULE_FILE = DATA_DIR / "mk_news_collection_schedule.json"
 VECTOR_COLLECTION_SCHEDULE_FILE = DATA_DIR / "vector_collection_schedule.json"
 CHANNEL_VISIBILITY_FILE = DATA_DIR / "channel_visibility.json"
-AGENT_CHAT_HISTORY_FILE = DATA_DIR / "agent_chat_history.json"
 AGENT_SETTINGS_FILE = DATA_DIR / "agent_settings.json"
 ALL_MENTION_CHANNELS = ["네이버", "구글", "다음", "커뮤니티", "네이버뉴스API", "매경API"]
 
@@ -147,41 +145,6 @@ def load_agent_settings() -> dict:
 
 def save_agent_settings(cfg: dict) -> None:
     save_json(AGENT_SETTINGS_FILE, cfg)
-
-
-def load_agent_chat_sessions(ip: str) -> list:
-    """AI AGENT 채팅 기록을 접속 IP 기준으로 불러온다 — F5 새로고침이나 다른 탭 이동 시에도
-    대화가 유지되도록 session_state가 아니라 파일에 저장한다. IP 기반 접근 제어를 쓰는
-    이 앱의 기존 사용자 식별 방식과 동일하게 IP를 키로 쓴다.
-
-    반환값은 [{"started_at": "...", "messages": [{"role", "content"}, ...]}, ...] 형태로,
-    오래된 대화부터 순서대로 담겨 있다 — 마지막 항목이 진행 중인(가장 최근) 대화다. 사용자가
-    "대화 초기화"를 누르면 기존 대화는 지우지 않고 새 항목을 추가해서, 지난 대화를 나중에도
-    볼 수 있게 한다."""
-    if not ip:
-        return []
-    all_sessions = load_json(AGENT_CHAT_HISTORY_FILE, {})
-    raw = all_sessions.get(ip, [])
-    if raw and isinstance(raw[0], dict) and "role" in raw[0]:
-        # 세션 단위로 나누기 전(초기 버전)에 저장된, 메시지 리스트 그대로인 옛 형식 — 진행 중인
-        # 대화 하나로 취급해 마이그레이션한다.
-        return [{"started_at": "", "messages": raw}]
-    return raw
-
-
-_agent_chat_history_lock = threading.Lock()
-
-
-def save_agent_chat_sessions(ip: str, sessions: list) -> None:
-    """read-entire-file → mutate → write-entire-file 방식이라, 서로 다른 IP가 거의 동시에
-    저장하면 락 없이는 한쪽의 저장이 다른 쪽 것을 덮어써 유실될 수 있다 — 파일 전체를 다루는
-    임계구역을 프로세스 전역 락으로 감싸 직렬화한다."""
-    if not ip:
-        return
-    with _agent_chat_history_lock:
-        all_sessions = load_json(AGENT_CHAT_HISTORY_FILE, {})
-        all_sessions[ip] = sessions
-        save_json(AGENT_CHAT_HISTORY_FILE, all_sessions)
 
 
 _RELATIVE_KOREAN_DATE_RE = re.compile(r"^(\d+)(분|시간|일)\s*전$")
