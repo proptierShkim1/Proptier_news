@@ -1,8 +1,16 @@
 import json
+import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 ROOT = Path(__file__).parent
+load_dotenv(ROOT / ".env")
 CONFIG_PATH = ROOT / "data" / "access_config.json"
+
+_SUPER_ADMIN_IPS = {
+    ip.strip() for ip in os.getenv("SUPER_ADMIN_IPS", "").split(",") if ip.strip()
+}
 
 
 def load_config() -> dict:
@@ -33,25 +41,16 @@ def name_for_ip(ip: str) -> str:
     return ip_name_map().get(ip, "")
 
 
-def is_allowed(ip: str) -> bool:
-    """허용 IP 목록이 비어 있으면 모두 허용 (부트스트랩 모드)."""
-    allowed_ips = load_config().get("allowed_ips", [])
-    if not allowed_ips:
-        return True
-    if not ip:
-        return True
-    return any(
-        (entry["ip"] if isinstance(entry, dict) else entry) == ip
-        for entry in allowed_ips
-    )
-
-
 def is_admin(ip: str) -> bool:
     """슈퍼관리자 여부.
 
-    허용 IP 목록이 비어있거나(부트스트랩), 아직 관리자로 지정된 IP가
+    SUPER_ADMIN_IPS(.env)에 등록된 IP는 설정 파일 상태와 무관하게 항상 관리자다 —
+    누군가 설정 화면에서 실수로 관리자 체크를 풀어도 잠기지 않도록 하는 안전장치.
+    그 외에는 허용 IP 목록이 비어있거나(부트스트랩), 아직 관리자로 지정된 IP가
     하나도 없으면(신규 마이그레이션 직후 잠금 방지) 모두 관리자로 간주.
     """
+    if ip and ip in _SUPER_ADMIN_IPS:
+        return True
     allowed_ips = load_config().get("allowed_ips", [])
     if not allowed_ips:
         return True

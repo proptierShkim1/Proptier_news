@@ -280,12 +280,12 @@ def _render_access_control():
 
     if not allowed_ips:
         st.warning(
-            f"⚠️ 허용 IP가 등록되지 않아 **누구나** 접근할 수 있습니다.  \n"
-            f"아래에서 본인 IP(`{client_ip}`)를 등록하세요."
+            f"⚠️ 관리자로 등록된 IP가 없어 **누구나** 이 설정 메뉴를 볼 수 있습니다.  \n"
+            f"아래에서 본인 IP(`{client_ip}`)를 관리자로 등록하세요."
         )
 
-    st.subheader("허용 IP 관리")
-    st.caption(f"현재 접속 IP: `{client_ip}`")
+    st.subheader("관리자 IP 관리")
+    st.caption(f"현재 접속 IP: `{client_ip}` — 앱 자체는 모든 IP에서 접속 가능하며, 아래 목록은 설정 메뉴(관리자 기능) 접근만 제한합니다.")
 
     col_name, col_ip = st.columns([2, 3])
     with col_name:
@@ -332,9 +332,9 @@ def _render_access_control():
 
     st.divider()
     if not allowed_ips:
-        st.info("등록된 허용 IP가 없습니다. (현재 모든 접속 허용 중)")
+        st.info("등록된 관리자 IP가 없습니다. (현재 모두 관리자 취급 중)")
     else:
-        st.caption(f"등록된 허용 IP — {len(allowed_ips):,}개")
+        st.caption(f"등록된 관리자 후보 IP — {len(allowed_ips):,}개")
         for i, entry in enumerate(list(allowed_ips)):
             col_n, col_i, col_admin, col_del = st.columns([2.5, 3.5, 1.5, 1])
             col_n.write(entry.get("name") or "—")

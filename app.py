@@ -2,7 +2,7 @@ import streamlit as st
 
 import theme
 import db
-from access_control import is_allowed, is_admin
+from access_control import is_admin
 from report_pdf import DECK_CSS
 from scheduler import start_scheduler_thread
 from views import agent, news_today, firms, briefings, search, report, policy_news, settings
@@ -34,11 +34,6 @@ def _get_client_ip() -> str:
 
 _client_ip = _get_client_ip()
 st.session_state["_client_ip"] = _client_ip
-
-if not is_allowed(_client_ip):
-    st.markdown("## \U0001F512 접근 제한")
-    st.error(f"허용된 IP에서만 접근할 수 있습니다.\n\n현재 접속 IP: `{_client_ip}`")
-    st.stop()
 
 _is_admin = is_admin(_client_ip)
 st.session_state["_is_admin"] = _is_admin
