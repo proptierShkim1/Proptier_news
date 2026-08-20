@@ -343,6 +343,8 @@ def test_run_naver_news_collection_saves_records_tagged_with_naver_news_channel(
         lambda term: [_fake_naver_news_record("https://x/1", term)],
     )
 
+    monkeypatch.setattr(collector.article_content, "fetch_content", lambda url: "")
+
     entries = collector.run_naver_news_collection()
 
     assert len(entries) == 1
@@ -352,6 +354,24 @@ def test_run_naver_news_collection_saves_records_tagged_with_naver_news_channel(
     assert mentions[0]["content"] == ""
 
 
+def test_run_naver_news_collection_fetches_article_content_via_article_content_module(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(collector, "load_keywords", _naver_news_keywords)
+    monkeypatch.setattr(
+        collector.naver_news_api_crawler, "search",
+        lambda term: [_fake_naver_news_record("https://x/1", term)],
+    )
+    monkeypatch.setattr(
+        collector.article_content, "fetch_content",
+        lambda url: f"본문:{url}",
+    )
+
+    collector.run_naver_news_collection()
+
+    mentions = db.get_mentions(channel="네이버뉴스API")
+    assert mentions[0]["content"] == "본문:https://x/1"
+
+
 def test_run_naver_news_collection_skips_duplicate_urls(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     monkeypatch.setattr(collector, "load_keywords", _naver_news_keywords)
@@ -359,6 +379,7 @@ def test_run_naver_news_collection_skips_duplicate_urls(tmp_path, monkeypatch):
         collector.naver_news_api_crawler, "search",
         lambda term: [_fake_naver_news_record("https://x/1", term), _fake_naver_news_record("https://x/1", term)],
     )
+    monkeypatch.setattr(collector.article_content, "fetch_content", lambda url: "")
 
     entries = collector.run_naver_news_collection()
 
@@ -391,6 +412,7 @@ def test_start_background_naver_news_collection_runs_and_completes(tmp_path, mon
         collector.naver_news_api_crawler, "search",
         lambda term: [_fake_naver_news_record("https://x/1", term)],
     )
+    monkeypatch.setattr(collector.article_content, "fetch_content", lambda url: "")
 
     run_id = collector.start_background_naver_news_collection()
 

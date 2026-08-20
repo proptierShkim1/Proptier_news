@@ -9,6 +9,7 @@ import uuid
 from datetime import date, datetime, timedelta
 
 import db
+from crawlers import article_content
 from crawlers import daum as daum_crawler
 from crawlers import dcinside as dcinside_crawler
 from crawlers import google as google_crawler
@@ -37,6 +38,7 @@ _CONTENT_FETCHERS = {
         naver_crawler.fetch_content(record["url"]) if record["source_detail"] == "블로그" else ""
     ),
     "다음": lambda record: daum_crawler.fetch_content(record["url"]),
+    "네이버뉴스API": lambda record: article_content.fetch_content(record["url"]),
 }
 
 # 키워드가 일반 단어와 겹치는 경우를 걸러내기 위한 기본 문맥 단어 목록 (부동산 도메인)
