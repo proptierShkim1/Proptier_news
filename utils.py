@@ -17,6 +17,7 @@ MK_NEWS_COLLECTION_SCHEDULE_FILE = DATA_DIR / "mk_news_collection_schedule.json"
 VECTOR_COLLECTION_SCHEDULE_FILE = DATA_DIR / "vector_collection_schedule.json"
 CHANNEL_VISIBILITY_FILE = DATA_DIR / "channel_visibility.json"
 AGENT_CHAT_HISTORY_FILE = DATA_DIR / "agent_chat_history.json"
+AGENT_SETTINGS_FILE = DATA_DIR / "agent_settings.json"
 ALL_MENTION_CHANNELS = ["네이버", "구글", "다음", "커뮤니티", "네이버뉴스API", "매경API"]
 
 
@@ -132,6 +133,20 @@ def load_channel_visibility() -> list:
 
 def save_channel_visibility(channels: list) -> None:
     save_json(CHANNEL_VISIBILITY_FILE, {"enabled_channels": channels})
+
+
+def load_agent_settings() -> dict:
+    """AI AGENT 페이지 동작을 조정하는 관리자 설정. always_show_hybrid_search가 True면
+    사내 데이터가 충분하다고 판단된 답변에도 Hybrid Search 버튼을 계속 보여준다 — 벡터
+    검색이 무관한 자료를 "관련 있음"으로 잘못 판단한 경우(수집 키워드가 넓어 생기는 노이즈
+    등)에도 사용자가 직접 웹 검색 답변을 추가로 받아볼 수 있게 하기 위함."""
+    cfg = load_json(AGENT_SETTINGS_FILE, {"always_show_hybrid_search": False})
+    cfg.setdefault("always_show_hybrid_search", False)
+    return cfg
+
+
+def save_agent_settings(cfg: dict) -> None:
+    save_json(AGENT_SETTINGS_FILE, cfg)
 
 
 def load_agent_chat_sessions(ip: str) -> list:

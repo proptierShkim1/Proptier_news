@@ -41,6 +41,7 @@ def render():
         st.session_state["agent_chat_sessions"] = sessions
 
     sessions = st.session_state["agent_chat_sessions"]
+    always_show_hybrid_search = utils.load_agent_settings()["always_show_hybrid_search"]
 
     picked_idx = len(sessions) - 1
     if len(sessions) > 1:
@@ -64,7 +65,8 @@ def render():
             st.markdown(turn["content"])
             if (
                 is_current and turn["role"] == "assistant"
-                and turn.get("insufficient") and not turn.get("web_search_done")
+                and (turn.get("insufficient") or always_show_hybrid_search)
+                and not turn.get("web_search_done")
             ):
                 if st.button("\U0001F310 Hybrid Search 실행", key=f"web_search_btn_{idx}"):
                     question = viewed["messages"][idx - 1]["content"]

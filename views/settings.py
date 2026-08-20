@@ -17,6 +17,7 @@ import vectorizer
 from access_control import load_config, save_config, name_for_ip
 from utils import (
     ALL_MENTION_CHANNELS,
+    load_agent_settings,
     load_channel_visibility,
     load_collection_schedule,
     load_keywords,
@@ -24,6 +25,7 @@ from utils import (
     load_naver_news_collection_schedule,
     load_policy_collection_schedule,
     load_vector_collection_schedule,
+    save_agent_settings,
     save_channel_visibility,
     save_collection_schedule,
     save_keywords,
@@ -58,7 +60,7 @@ _DATA_UPLOAD_SKIP = {
     "collection_schedule.json",
     "policy_collection_schedule.json", "naver_news_collection_schedule.json",
     "mk_news_collection_schedule.json", "vector_collection_schedule.json",
-    "channel_visibility.json", "agent_chat_history.json", "deploy_log.jsonl",
+    "channel_visibility.json", "agent_chat_history.json", "agent_settings.json", "deploy_log.jsonl",
     "scheduler.log", "scheduler_last_fired.json", "vector_backups", "db_backups",
 }
 
@@ -1515,13 +1517,31 @@ def _render_api_usage_tab():
         theme.bar_chart({d["date"]: d["calls"] for d in daily}, height=200)
 
 
+def _render_agent_settings_tab():
+    st.subheader("🌐 Hybrid Search")
+    cfg = load_agent_settings()
+    always_show = st.checkbox(
+        "사내 데이터로 답변 가능해도 Hybrid Search 버튼 항상 표시",
+        value=cfg["always_show_hybrid_search"],
+        help="기본값은 꺼짐 — 벡터 검색이 사내 데이터를 \"충분하다\"고 판단했을 때는 버튼이"
+             " 안 보인다. 켜두면 그런 경우에도 버튼이 계속 보여서, 수집 키워드가 넓어 무관한"
+             " 자료가 섞여 들어온 경우(예: \"AI\" 키워드로 수집된 무관한 기사) 같은 상황에서도"
+             " 사용자가 직접 웹 검색 답변을 추가로 받아볼 수 있다.",
+    )
+    if always_show != cfg["always_show_hybrid_search"]:
+        save_agent_settings({"always_show_hybrid_search": always_show})
+        st.rerun()
+
+
 # ── 메인 진입점 ────────────────────────────────────────────────────────────
 
 def render():
     st.title("⚙️ 설정")
     _render_lazy_tabs(
-        ["🔐 접근 제어", "🔄 데이터 수집", "🗃 데이터 관리", "🧬 벡터 데이터", "💳 API 사용량", "📋 로그", "🚀 배포"],
+        ["🔐 접근 제어", "🔄 데이터 수집", "🗃 데이터 관리", "🧬 벡터 데이터", "🤖 AI AGENT",
+         "💳 API 사용량", "📋 로그", "🚀 배포"],
         "main_tab",
         [_render_access_control, _render_data_collection, _render_data_management,
-         _render_vector_data_tab, _render_api_usage_tab, _render_activity_log_tab, _render_deploy],
+         _render_vector_data_tab, _render_agent_settings_tab, _render_api_usage_tab,
+         _render_activity_log_tab, _render_deploy],
     )

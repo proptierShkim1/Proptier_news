@@ -190,6 +190,28 @@ def test_load_channel_visibility_ignores_unknown_channel_names(tmp_path, monkeyp
     assert load_channel_visibility() == ["네이버"]
 
 
+def test_load_agent_settings_defaults_to_hybrid_search_off_when_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(utils, "AGENT_SETTINGS_FILE", tmp_path / "agent_settings.json")
+
+    assert utils.load_agent_settings() == {"always_show_hybrid_search": False}
+
+
+def test_save_and_load_agent_settings_roundtrips(tmp_path, monkeypatch):
+    monkeypatch.setattr(utils, "AGENT_SETTINGS_FILE", tmp_path / "agent_settings.json")
+
+    utils.save_agent_settings({"always_show_hybrid_search": True})
+
+    assert utils.load_agent_settings() == {"always_show_hybrid_search": True}
+
+
+def test_load_agent_settings_backfills_missing_key_from_old_file(tmp_path, monkeypatch):
+    settings_file = tmp_path / "agent_settings.json"
+    monkeypatch.setattr(utils, "AGENT_SETTINGS_FILE", settings_file)
+    settings_file.write_text(json.dumps({}), encoding="utf-8")
+
+    assert utils.load_agent_settings() == {"always_show_hybrid_search": False}
+
+
 def test_load_agent_chat_sessions_defaults_to_empty_list_when_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(utils, "AGENT_CHAT_HISTORY_FILE", tmp_path / "agent_chat_history.json")
 
