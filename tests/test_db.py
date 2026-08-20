@@ -962,3 +962,33 @@ def test_restore_latest_backup_replaces_corrupted_db_and_preserves_it(tmp_path, 
     assert db.count_mentions() == 1
     failed_copies = list(tmp_path.glob("news.db.autofailed-*"))
     assert len(failed_copies) == 1
+
+
+def test_init_db_self_heals_when_db_already_corrupted_at_startup(tmp_path, monkeypatch):
+    """app.py는 스크립트 재실행마다 맨 앞에서 init_db()를 부르고, 그게 실패하면 스케줄러
+    (10분 주기 자동 복구)가 아예 시작되지 못한다 — 즉 init_db() 자신이 스케줄러를 기다리지
+    않고 부팅 시점에 바로 복구해야 한다(2026-08-20 사고: 배포 재시작 후 손상된 채로 몇
+    분이 지나도 scheduler.log에 기록이 전혀 없었음 — start_scheduler_thread()가 그 앞
+    줄에서 매번 죽어서 호출조차 안 됐던 것)."""
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1"))
+    db.backup_database()
+    db.insert_mention(_mention(url="https://x/2"))  # 백업 이후 추가 - 복구하면 사라짐
+
+    gc.collect()
+    _truncate_in_half(db.DB_PATH)
+
+    db.init_db()  # 예외 없이 통과해야 한다 - 내부에서 자가복구 후 진행
+
+    assert db.is_healthy() is True
+    assert db.count_mentions() == 1
+
+
+def test_init_db_does_not_touch_healthy_db(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1"))
+
+    db.init_db()
+
+    assert db.count_mentions() == 1
+    assert not list(tmp_path.glob("news.db.autofailed-*"))

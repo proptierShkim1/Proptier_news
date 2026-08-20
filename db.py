@@ -202,6 +202,14 @@ def _coerce_ints(rows: list[dict], *fields: str) -> list[dict]:
 
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    # app.py가 매 스크립트 재실행(rerun)마다 맨 앞에서 init_db()를 부르는데, 여기서
+    # 예외가 나면 스케줄러(start_scheduler_thread)가 아예 시작되지 못한다 — 즉 10분
+    # 주기 자동 복구가 "복구 대상 DB를 열려다 죽어서 복구 코드 자체가 못 도는" 굳음
+    # 상태에 빠진다(2026-08-20 실측: 배포 재시작 후 손상된 채로 몇 분이 지나도
+    # scheduler.log에 기록이 전혀 없었음). 그래서 여기, 앱이 DB를 처음 만지는
+    # 지점에서 스케줄러를 기다리지 않고 바로 자가복구한다.
+    if DB_PATH.exists() and not is_healthy():
+        restore_latest_backup()
     with _connect() as con:
         # WAL 모드에서는 읽기가 쓰기를 막지 않고 쓰기도 읽기를 막지 않는다(쓰기끼리는 여전히
         # 직렬화됨) — 여러 사용자가 동시에 접속할 때 기본 롤백저널 모드보다 잠금 경쟁이 훨씬
