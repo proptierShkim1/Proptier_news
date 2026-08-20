@@ -14,7 +14,7 @@ GEMINI_MODEL)을 재사용한다.
 추가되므로 매 질문마다 다른 검색 결과를 반영할 수 있다.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from google import genai
 from google.genai import types
@@ -449,12 +449,105 @@ def get_top_viewed_policy_events(limit: int = 5) -> list[dict]:
     return cached_db.get_top_viewed_policy_events(limit=limit)
 
 
+def search_mentions(keyword: str = "", brand: str = "", days: int = 30, limit: int = 5) -> list[dict]:
+    """수집된 뉴스 기사를 키워드/브랜드/기간으로 검색해 실제 기사 목록(제목·링크 등)을
+    반환한다 — 다른 지표 도구들과 달리 건수가 아니라 개별 기사 내용을 준다. "직방 관련
+    최근 기사 보여줘", "이번주 매물 관련 기사 뭐 있어" 같은 질문에 쓴다.
+
+    Args:
+        keyword: 제목·요약에 모두 포함돼야 하는 검색어 (여러 단어는 띄어쓰기로 구분,
+            대소문자 구분 안 함). 비우면 키워드로 거르지 않는다.
+        brand: 특정 브랜드로 제한 (예: "직방"). 비우면 전체 브랜드 대상.
+        days: 최근 며칠간을 볼지 (기본 30일).
+        limit: 몇 건까지 보여줄지 (기본 5건).
+
+    Returns:
+        [{"title": str, "url": str, "channel": str, "brand": str, "collected_at": str}, ...]
+        최신순. 조건에 맞는 기사가 없으면 빈 리스트.
+    """
+    mentions = cached_db.get_mentions(brand=brand, limit=3000)
+    terms = keyword.lower().split() if keyword else []
+    if terms:
+        mentions = [
+            m for m in mentions
+            if all(t in f"{m.get('title', '')} {m.get('snippet', '')}".lower() for t in terms)
+        ]
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    mentions = [m for m in mentions if (m.get("collected_at") or "") >= cutoff]
+    mentions.sort(key=lambda m: m.get("collected_at", ""), reverse=True)
+    return [
+        {
+            "title": m["title"], "url": m["url"], "channel": m["channel"],
+            "brand": m["brand"], "collected_at": m["collected_at"],
+        }
+        for m in mentions[:limit]
+    ]
+
+
+def get_brand_mention_trend(brand: str, days: int = 30) -> list[dict]:
+    """특정 브랜드의 언급 건수가 날짜별로 어떻게 변해왔는지 알려준다 — compare_brand_mentions는
+    기간 합계 하나만 주는데, "이번 달 프롭티어 언급 추이 일자별로 보여줘"처럼 날짜별 흐름이
+    필요한 질문엔 이 도구를 쓴다.
+
+    Args:
+        brand: 조회할 브랜드명.
+        days: 최근 며칠간을 볼지 (기본 30일).
+
+    Returns:
+        [{"date": "YYYY-MM-DD", "count": int}, ...] 날짜 오름차순. 언급이 없던 날짜는
+        포함되지 않는다.
+    """
+    mentions = cached_db.get_mentions_since(days)
+    counts: dict[str, int] = {}
+    for m in mentions:
+        if m.get("brand") != brand:
+            continue
+        date = (m.get("collected_at") or "")[:10]
+        if date:
+            counts[date] = counts.get(date, 0) + 1
+    return [{"date": d, "count": c} for d, c in sorted(counts.items())]
+
+
+def get_trending_brands(recent_days: int = 3, baseline_days: int = 30, limit: int = 5) -> list[dict]:
+    """평소(baseline_days일 일평균) 대비 최근(recent_days일) 언급이 급증한 브랜드를 찾는다
+    — "요즘 갑자기 뜨는 이슈 뭐야" 같은 질문에 쓴다. mentions에는 정책 보도자료와 달리
+    자체 조회수 데이터가 없어(외부 사이트 기사라 조회수를 집계하지 않음), "인기"가 아니라
+    "평소 대비 급증"을 화제성 지표로 대신 쓴다.
+
+    Args:
+        recent_days: 급증 여부를 볼 최근 기간 (기본 3일).
+        baseline_days: 비교 기준이 될 전체 기간 (기본 30일, recent_days를 포함).
+        limit: 몇 개까지 보여줄지 (기본 5개).
+
+    Returns:
+        [{"brand": str, "recent_count": int, "baseline_daily_avg": float,
+        "spike_ratio": float}, ...] spike_ratio 내림차순. 최근 기간에 언급이 아예 없는
+        브랜드는 제외된다. spike_ratio가 클수록 평소보다 갑자기 많이 언급됐다는 뜻이다.
+    """
+    recent = {b["brand"]: b["count"] for b in cached_db.get_top_mentioned_brands(days=recent_days, limit=1000)}
+    baseline = {b["brand"]: b["count"] for b in cached_db.get_top_mentioned_brands(days=baseline_days, limit=1000)}
+    prior_days = max(baseline_days - recent_days, 1)
+    results = []
+    for brand, recent_count in recent.items():
+        prior_count = max(baseline.get(brand, recent_count) - recent_count, 0)
+        baseline_daily_avg = prior_count / prior_days
+        recent_daily_avg = recent_count / recent_days
+        spike_ratio = recent_daily_avg / baseline_daily_avg if baseline_daily_avg > 0 else recent_daily_avg
+        results.append({
+            "brand": brand, "recent_count": recent_count,
+            "baseline_daily_avg": round(baseline_daily_avg, 2),
+            "spike_ratio": round(spike_ratio, 2),
+        })
+    results.sort(key=lambda r: r["spike_ratio"], reverse=True)
+    return results[:limit]
+
+
 _STATS_TOOLS = [
     get_channel_counts, get_overview_stats, get_brand_mention_count, get_policy_source_counts,
     get_briefing_highlights, get_collection_health, compare_brand_mentions, get_vectorization_status,
     get_top_mentioned_brands, get_news_category_counts, get_policy_category_counts,
     compare_collection_periods, get_api_cost_summary, get_tracked_brands, get_pdf_report_stats,
-    get_top_viewed_policy_events,
+    get_top_viewed_policy_events, search_mentions, get_brand_mention_trend, get_trending_brands,
 ]
 
 

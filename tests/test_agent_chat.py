@@ -569,3 +569,101 @@ def test_get_top_viewed_policy_events_delegates_to_db(monkeypatch):
     monkeypatch.setattr(agent_chat.cached_db, "get_top_viewed_policy_events", lambda limit: top)
 
     assert agent_chat.get_top_viewed_policy_events(limit=5) == top
+
+
+def _fix_now(monkeypatch, fixed):
+    class _FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed
+
+    monkeypatch.setattr(agent_chat, "datetime", _FixedDatetime)
+
+
+def test_search_mentions_filters_by_keyword_brand_and_recency(monkeypatch):
+    _fix_now(monkeypatch, datetime(2026, 8, 20, 12, 0, 0))
+    mentions = [
+        {"title": "직방 AI 매물 추천", "url": "https://x/1", "channel": "네이버", "brand": "직방",
+         "snippet": "", "collected_at": "2026-08-19 10:00:00"},
+        {"title": "직방 관련없는 소식", "url": "https://x/2", "channel": "네이버", "brand": "직방",
+         "snippet": "인사 발령 소식", "collected_at": "2026-08-18 10:00:00"},
+        {"title": "너무 오래된 매물 기사", "url": "https://x/3", "channel": "네이버", "brand": "직방",
+         "snippet": "", "collected_at": "2026-06-01 10:00:00"},
+    ]
+    monkeypatch.setattr(agent_chat.cached_db, "get_mentions", lambda brand, limit: mentions)
+
+    result = agent_chat.search_mentions(keyword="매물", brand="직방", days=30, limit=5)
+
+    assert [r["url"] for r in result] == ["https://x/1"]
+
+
+def test_search_mentions_returns_most_recent_first_capped_at_limit(monkeypatch):
+    _fix_now(monkeypatch, datetime(2026, 8, 20, 12, 0, 0))
+    mentions = [
+        {"title": f"기사{i}", "url": f"https://x/{i}", "channel": "네이버", "brand": "직방",
+         "snippet": "", "collected_at": f"2026-08-{10 + i:02d} 10:00:00"}
+        for i in range(5)
+    ]
+    monkeypatch.setattr(agent_chat.cached_db, "get_mentions", lambda brand, limit: mentions)
+
+    result = agent_chat.search_mentions(brand="직방", limit=2)
+
+    assert [r["url"] for r in result] == ["https://x/4", "https://x/3"]
+
+
+def test_search_mentions_returns_empty_list_when_nothing_matches(monkeypatch):
+    _fix_now(monkeypatch, datetime(2026, 8, 20, 12, 0, 0))
+    monkeypatch.setattr(agent_chat.cached_db, "get_mentions", lambda brand, limit: [])
+
+    assert agent_chat.search_mentions(keyword="없는키워드") == []
+
+
+def test_get_brand_mention_trend_aggregates_counts_per_date(monkeypatch):
+    mentions = [
+        {"brand": "직방", "collected_at": "2026-08-10 09:00:00"},
+        {"brand": "직방", "collected_at": "2026-08-10 15:00:00"},
+        {"brand": "직방", "collected_at": "2026-08-11 09:00:00"},
+        {"brand": "다방", "collected_at": "2026-08-11 09:00:00"},
+    ]
+    monkeypatch.setattr(agent_chat.cached_db, "get_mentions_since", lambda days: mentions)
+
+    result = agent_chat.get_brand_mention_trend("직방", days=30)
+
+    assert result == [{"date": "2026-08-10", "count": 2}, {"date": "2026-08-11", "count": 1}]
+
+
+def test_get_brand_mention_trend_returns_empty_list_for_untracked_brand(monkeypatch):
+    monkeypatch.setattr(agent_chat.cached_db, "get_mentions_since", lambda days: [
+        {"brand": "다방", "collected_at": "2026-08-11 09:00:00"},
+    ])
+
+    assert agent_chat.get_brand_mention_trend("없는브랜드", days=30) == []
+
+
+def test_get_trending_brands_ranks_by_spike_ratio(monkeypatch):
+    def fake_top(days, limit):
+        if days == 3:
+            return [{"brand": "직방", "count": 9}, {"brand": "다방", "count": 3}]
+        return [{"brand": "직방", "count": 12}, {"brand": "다방", "count": 30}]  # baseline=30일
+
+    monkeypatch.setattr(agent_chat.cached_db, "get_top_mentioned_brands", fake_top)
+
+    result = agent_chat.get_trending_brands(recent_days=3, baseline_days=30, limit=5)
+
+    # 직방: 최근 3일 9건(일평균 3) vs 그 이전 27일 3건(일평균 0.11) → 급증
+    # 다방: 최근 3일 3건(일평균 1) vs 그 이전 27일 27건(일평균 1) → 평소 수준
+    assert result[0]["brand"] == "직방"
+    assert result[0]["spike_ratio"] > result[1]["spike_ratio"]
+
+
+def test_get_trending_brands_treats_zero_baseline_as_new_activity(monkeypatch):
+    monkeypatch.setattr(
+        agent_chat.cached_db, "get_top_mentioned_brands",
+        lambda days, limit: [{"brand": "신규브랜드", "count": 6}] if days == 3 else [{"brand": "신규브랜드", "count": 6}],
+    )
+
+    result = agent_chat.get_trending_brands(recent_days=3, baseline_days=30, limit=5)
+
+    assert result[0]["brand"] == "신규브랜드"
+    assert result[0]["baseline_daily_avg"] == 0.0
+    assert result[0]["spike_ratio"] > 0
