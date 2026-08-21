@@ -129,7 +129,7 @@ def policy_event_mention_impact(
 
     before_start_date = announced_date - timedelta(days=before_days)
     after_end_date = announced_date + timedelta(days=after_days)
-    start_days_ago = max((_today() - before_start_date).days, 0)
+    start_days_ago = max((_today() - before_start_date).days, 0) + 1
     end_days_ago = max((_today() - after_end_date).days, 0)
     mentions = cached_db.get_mentions_between(start_days_ago, end_days_ago)
 

@@ -187,6 +187,26 @@ def test_policy_event_mention_impact_related_news_categories_empty_when_no_align
     assert result["related_news_categories"] == []
 
 
+def test_policy_event_mention_impact_start_days_ago_has_one_day_margin(monkeypatch):
+    monkeypatch.setattr(graph_queries, "_today", lambda: date(2026, 8, 21))
+    events = [{"title": "국토부 인사 발령", "announced_at": "2026-08-15"}]
+    seen_windows = []
+
+    def fake_get_mentions_between(start_days_ago, end_days_ago):
+        seen_windows.append((start_days_ago, end_days_ago))
+        return []
+
+    monkeypatch.setattr(graph_queries.cached_db, "get_policy_events_since", lambda days: events)
+    monkeypatch.setattr(graph_queries.cached_db, "get_mentions_between", fake_get_mentions_between)
+
+    graph_queries.policy_event_mention_impact("인사", before_days=7, after_days=7)
+
+    # before_start_date = 2026-08-08; (today - before_start_date).days = 13 exactly.
+    # start_days_ago must be 14 (13 + the 1-day safety margin) — without the margin this
+    # would be 13, and the assertion would fail, proving the margin is actually present.
+    assert seen_windows[0][0] == 14
+
+
 def test_brand_role_category_breakdown(monkeypatch):
     monkeypatch.setattr(
         graph_queries.utils,
