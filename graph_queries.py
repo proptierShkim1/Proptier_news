@@ -85,3 +85,68 @@ def category_alignment_counts(
     if policy_category:
         return _policy_category_alignment(policy_category, days)
     return [_news_category_alignment(nc, days) for nc in ontology.CATEGORY_ALIGNMENT]
+
+
+def policy_event_mention_impact(
+    policy_keyword: str, before_days: int = 7, after_days: int = 7
+) -> dict:
+    """제목에 policy_keyword가 포함된 정책 발표를 찾아, 그 발표일 전/후 기간의 관련
+    뉴스 언급 건수를 비교한다 — "이 정책 발표 전후로 관련 브랜드 뉴스가 늘었어?" 같은
+    질문에 쓴다. 최근 365일 내에서 가장 최근에 매칭되는 발표 하나를 기준으로 삼는다.
+
+    Args:
+        policy_keyword: 정책 발표 제목에서 찾을 키워드(예: "전세사기 특별법").
+        before_days: 발표일 이전 며칠을 "전" 기간으로 볼지 (기본 7일).
+        after_days: 발표일 이후 며칠을 "후" 기간으로 볼지 (기본 7일).
+
+    Returns:
+        매칭되는 발표가 없으면 {"found": False, "policy_keyword": str}. 있으면
+        {"found": True, "policy_event": {"title": str, "announced_at": str},
+        "before_count": int, "after_count": int, "change": int} — change는
+        after_count - before_count. 발표의 카테고리와 대응되는 뉴스카테고리가 온톨로지에
+        없으면 카테고리로 거르지 않고 기간 내 전체 언급을 집계한다.
+    """
+    events = cached_db.get_policy_events_since(365)
+    matches = [e for e in events if policy_keyword in e.get("title", "")]
+    if not matches:
+        return {"found": False, "policy_keyword": policy_keyword}
+
+    event = max(matches, key=lambda e: e.get("announced_at") or "")
+    announced_str = (event.get("announced_at") or "")[:10]
+    if not announced_str:
+        return {"found": False, "policy_keyword": policy_keyword}
+    announced_date = datetime.strptime(announced_str, "%Y-%m-%d").date()
+
+    related_news_categories: set[str] = set()
+    for category in policy_feed.categorize(event.get("title", "")):
+        related_news_categories.update(ontology.aligned_news_categories(category))
+
+    fetch_days = max((_today() - announced_date).days + after_days, before_days) + 1
+    mentions = cached_db.get_mentions_since(fetch_days)
+
+    before_start = (announced_date - timedelta(days=before_days)).isoformat()
+    announced_iso = announced_date.isoformat()
+    after_end = (announced_date + timedelta(days=after_days)).isoformat()
+
+    before_count = 0
+    after_count = 0
+    for m in mentions:
+        m_date = (m.get("collected_at") or "")[:10]
+        if not m_date:
+            continue
+        if related_news_categories:
+            text = f"{m.get('title', '')} {m.get('snippet', '')}"
+            if not related_news_categories & set(news_feed.categorize(text)):
+                continue
+        if before_start <= m_date < announced_iso:
+            before_count += 1
+        elif announced_iso <= m_date <= after_end:
+            after_count += 1
+
+    return {
+        "found": True,
+        "policy_event": {"title": event.get("title", ""), "announced_at": announced_str},
+        "before_count": before_count,
+        "after_count": after_count,
+        "change": after_count - before_count,
+    }

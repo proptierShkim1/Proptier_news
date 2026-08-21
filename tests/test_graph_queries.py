@@ -1,3 +1,5 @@
+from datetime import date
+
 import graph_queries
 
 
@@ -72,3 +74,50 @@ def test_category_alignment_counts_prefers_news_category_when_both_given(monkeyp
     )
 
     assert result["news_category"] == "정책"
+
+
+def test_policy_event_mention_impact_not_found(monkeypatch):
+    monkeypatch.setattr(graph_queries.cached_db, "get_policy_events_since", lambda days: [])
+
+    result = graph_queries.policy_event_mention_impact("전세사기")
+
+    assert result == {"found": False, "policy_keyword": "전세사기"}
+
+
+def test_policy_event_mention_impact_found_counts_before_after(monkeypatch):
+    monkeypatch.setattr(graph_queries, "_today", lambda: date(2026, 8, 21))
+    events = [{"title": "전세사기 특별법 시행령 개정", "announced_at": "2026-08-10"}]
+    mentions = [
+        {"title": "국토부 정책 발표", "snippet": "", "collected_at": "2026-08-05"},
+        {"title": "정책 대책 발표", "snippet": "", "collected_at": "2026-08-12"},
+        {"title": "정책 제도 개편", "snippet": "", "collected_at": "2026-08-14"},
+        {"title": "전세 매물 정보", "snippet": "", "collected_at": "2026-08-11"},
+    ]
+    monkeypatch.setattr(graph_queries.cached_db, "get_policy_events_since", lambda days: events)
+    monkeypatch.setattr(graph_queries.cached_db, "get_mentions_since", lambda days: mentions)
+
+    result = graph_queries.policy_event_mention_impact("전세사기", before_days=7, after_days=7)
+
+    assert result == {
+        "found": True,
+        "policy_event": {"title": "전세사기 특별법 시행령 개정", "announced_at": "2026-08-10"},
+        "before_count": 1,
+        "after_count": 2,
+        "change": 1,
+    }
+
+
+def test_policy_event_mention_impact_no_alignment_counts_all_mentions(monkeypatch):
+    monkeypatch.setattr(graph_queries, "_today", lambda: date(2026, 8, 21))
+    events = [{"title": "국토부 인사 발령", "announced_at": "2026-08-15"}]
+    mentions = [
+        {"title": "전세 매물 정보", "snippet": "", "collected_at": "2026-08-12"},
+        {"title": "미국 부동산 동향", "snippet": "", "collected_at": "2026-08-16"},
+    ]
+    monkeypatch.setattr(graph_queries.cached_db, "get_policy_events_since", lambda days: events)
+    monkeypatch.setattr(graph_queries.cached_db, "get_mentions_since", lambda days: mentions)
+
+    result = graph_queries.policy_event_mention_impact("인사", before_days=7, after_days=7)
+
+    assert result["before_count"] == 1
+    assert result["after_count"] == 1
