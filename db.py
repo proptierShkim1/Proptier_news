@@ -390,6 +390,23 @@ def count_mentions_between(start_days_ago: int, end_days_ago: int) -> int:
         ).fetchone()[0]
 
 
+def get_mentions_between(start_days_ago: int, end_days_ago: int, limit: int = 50000) -> list[dict]:
+    """collected_at이 (now - start_days_ago일) 이상 (now - end_days_ago일) 미만인 mentions을
+    반환한다. get_mentions_since와 달리 "최신순 LIMIT"이 아니라 명시적 날짜 구간이라, 최근이
+    아닌 과거 구간(예: 오래된 정책 발표 전후 비교)을 조회해도 최신 데이터에 밀려 잘리지
+    않는다. embedding 컬럼(평균 40KB)은 빼고 집계에 필요한 컬럼만 선택한다."""
+    init_db()
+    with _connect() as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT brand, title, snippet, collected_at FROM mentions "
+            "WHERE collected_at >= datetime('now', ?) AND collected_at < datetime('now', ?) "
+            "ORDER BY collected_at DESC LIMIT ?",
+            [f"-{start_days_ago} days", f"-{end_days_ago} days", limit],
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def get_mentions(
     brand: str = "", channel: str = "", channels: list | None = None, limit: int = 3000
 ) -> list[dict]:

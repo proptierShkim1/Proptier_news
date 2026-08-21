@@ -667,3 +667,11 @@ def test_get_trending_brands_treats_zero_baseline_as_new_activity(monkeypatch):
     assert result[0]["brand"] == "신규브랜드"
     assert result[0]["baseline_daily_avg"] == 0.0
     assert result[0]["spike_ratio"] > 0
+
+
+def test_stats_tools_include_graph_queries_tools():
+    import graph_queries
+
+    assert graph_queries.category_alignment_counts in agent_chat._STATS_TOOLS
+    assert graph_queries.policy_event_mention_impact in agent_chat._STATS_TOOLS
+    assert graph_queries.brand_role_category_breakdown in agent_chat._STATS_TOOLS

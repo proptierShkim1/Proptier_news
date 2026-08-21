@@ -21,6 +21,7 @@ from google.genai import types
 
 import cached_db
 import db
+import graph_queries
 import news_feed
 import policy_feed
 import summarizer
@@ -48,7 +49,7 @@ _WEB_SEARCH_NOTE = (
 # 0.69~0.80대, 무관한 질문은 0.85~0.91대에 몰려 있었다.
 _INSUFFICIENT_DISTANCE_THRESHOLD = 0.83
 
-# _STATS_TOOLS(16개 지표 도구)만으로 명백히 답할 수 있는 질문 유형의 신호 키워드 —
+# _STATS_TOOLS(22개 지표 도구)만으로 명백히 답할 수 있는 질문 유형의 신호 키워드 —
 # 이런 질문은 벡터 검색(기사 원문 그라운딩)이 필요 없는데도 지금까지 매 메시지마다
 # 임베딩 API를 2번(뉴스/정책) 호출하고 있었다. 동시 사용자가 늘수록 이 낭비가
 # 커지므로, 명백한 경우에만 건너뛴다 — 애매하면 항상 그라운딩을 시도한다(거짓양성으로
@@ -548,6 +549,8 @@ _STATS_TOOLS = [
     get_top_mentioned_brands, get_news_category_counts, get_policy_category_counts,
     compare_collection_periods, get_api_cost_summary, get_tracked_brands, get_pdf_report_stats,
     get_top_viewed_policy_events, search_mentions, get_brand_mention_trend, get_trending_brands,
+    graph_queries.category_alignment_counts, graph_queries.policy_event_mention_impact,
+    graph_queries.brand_role_category_breakdown,
 ]
 
 

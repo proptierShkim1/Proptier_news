@@ -125,6 +125,11 @@ def count_mentions_between(start_days_ago: int, end_days_ago: int) -> int:
 
 
 @st.cache_data(ttl=60, show_spinner=False)
+def get_mentions_between(start_days_ago: int, end_days_ago: int) -> list[dict]:
+    return db.get_mentions_between(start_days_ago, end_days_ago)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
 def get_api_usage_summary(days: int) -> dict:
     return db.get_api_usage_summary(days=days)
 
@@ -161,6 +166,7 @@ def clear() -> None:
     get_mentions_since.clear()
     get_policy_events_since.clear()
     count_mentions_between.clear()
+    get_mentions_between.clear()
     get_api_usage_summary.clear()
     count_activity_log_by_action.clear()
     get_top_viewed_policy_events.clear()
