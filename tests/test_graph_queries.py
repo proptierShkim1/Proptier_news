@@ -94,7 +94,11 @@ def test_policy_event_mention_impact_found_counts_before_after(monkeypatch):
         {"title": "전세 매물 정보", "snippet": "", "collected_at": "2026-08-11"},
     ]
     monkeypatch.setattr(graph_queries.cached_db, "get_policy_events_since", lambda days: events)
-    monkeypatch.setattr(graph_queries.cached_db, "get_mentions_since", lambda days: mentions)
+    monkeypatch.setattr(
+        graph_queries.cached_db,
+        "get_mentions_between",
+        lambda start_days_ago, end_days_ago: mentions,
+    )
 
     result = graph_queries.policy_event_mention_impact("전세사기", before_days=7, after_days=7)
 
@@ -104,6 +108,7 @@ def test_policy_event_mention_impact_found_counts_before_after(monkeypatch):
         "before_count": 1,
         "after_count": 2,
         "change": 1,
+        "related_news_categories": ["정책"],
     }
 
 
@@ -115,7 +120,11 @@ def test_policy_event_mention_impact_no_alignment_counts_all_mentions(monkeypatc
         {"title": "미국 부동산 동향", "snippet": "", "collected_at": "2026-08-16"},
     ]
     monkeypatch.setattr(graph_queries.cached_db, "get_policy_events_since", lambda days: events)
-    monkeypatch.setattr(graph_queries.cached_db, "get_mentions_since", lambda days: mentions)
+    monkeypatch.setattr(
+        graph_queries.cached_db,
+        "get_mentions_between",
+        lambda start_days_ago, end_days_ago: mentions,
+    )
 
     result = graph_queries.policy_event_mention_impact("인사", before_days=7, after_days=7)
 
@@ -126,22 +135,56 @@ def test_policy_event_mention_impact_no_alignment_counts_all_mentions(monkeypatc
 def test_policy_event_mention_impact_asymmetric_window_fetches_enough_history(monkeypatch):
     monkeypatch.setattr(graph_queries, "_today", lambda: date(2026, 8, 21))
     events = [{"title": "국토부 인사 발령", "announced_at": "2026-08-16"}]
-    # Mention 35 days before announced_at (2026-08-16 - 30 days = 2026-07-17),
-    # well outside the old buggy fetch window
     mentions = [{"title": "전세 매물 정보", "snippet": "", "collected_at": "2026-07-18"}]
-    seen_days = []
+    seen_windows = []
 
-    def fake_get_mentions_since(days):
-        seen_days.append(days)
+    def fake_get_mentions_between(start_days_ago, end_days_ago):
+        seen_windows.append((start_days_ago, end_days_ago))
         return mentions
 
     monkeypatch.setattr(graph_queries.cached_db, "get_policy_events_since", lambda days: events)
-    monkeypatch.setattr(graph_queries.cached_db, "get_mentions_since", fake_get_mentions_since)
+    monkeypatch.setattr(graph_queries.cached_db, "get_mentions_between", fake_get_mentions_between)
 
     result = graph_queries.policy_event_mention_impact("인사", before_days=30, after_days=1)
 
-    assert seen_days[0] >= 35  # must fetch far enough back to see the 07-18 mention
+    assert seen_windows[0][0] >= 35  # start_days_ago must reach back to before_start (2026-07-17)
     assert result["before_count"] == 1
+
+
+def test_policy_event_mention_impact_after_window_excludes_day_after_after_days(monkeypatch):
+    monkeypatch.setattr(graph_queries, "_today", lambda: date(2026, 8, 21))
+    events = [{"title": "전세사기 특별법 시행령 개정", "announced_at": "2026-08-10"}]
+    mentions = [
+        {"title": "정책 대책 발표", "snippet": "", "collected_at": "2026-08-17"},
+    ]
+    monkeypatch.setattr(graph_queries.cached_db, "get_policy_events_since", lambda days: events)
+    monkeypatch.setattr(graph_queries.cached_db, "get_mentions_between", lambda s, e: mentions)
+
+    result = graph_queries.policy_event_mention_impact("전세사기", before_days=7, after_days=7)
+
+    assert result["after_count"] == 0
+
+
+def test_policy_event_mention_impact_includes_related_news_categories(monkeypatch):
+    monkeypatch.setattr(graph_queries, "_today", lambda: date(2026, 8, 21))
+    events = [{"title": "전세사기 특별법 시행령 개정", "announced_at": "2026-08-10"}]
+    monkeypatch.setattr(graph_queries.cached_db, "get_policy_events_since", lambda days: events)
+    monkeypatch.setattr(graph_queries.cached_db, "get_mentions_between", lambda s, e: [])
+
+    result = graph_queries.policy_event_mention_impact("전세사기")
+
+    assert result["related_news_categories"] == ["정책"]
+
+
+def test_policy_event_mention_impact_related_news_categories_empty_when_no_alignment(monkeypatch):
+    monkeypatch.setattr(graph_queries, "_today", lambda: date(2026, 8, 21))
+    events = [{"title": "국토부 인사 발령", "announced_at": "2026-08-15"}]
+    monkeypatch.setattr(graph_queries.cached_db, "get_policy_events_since", lambda days: events)
+    monkeypatch.setattr(graph_queries.cached_db, "get_mentions_between", lambda s, e: [])
+
+    result = graph_queries.policy_event_mention_impact("인사")
+
+    assert result["related_news_categories"] == []
 
 
 def test_brand_role_category_breakdown(monkeypatch):

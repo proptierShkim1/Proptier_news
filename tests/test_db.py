@@ -97,6 +97,24 @@ def test_count_mentions_between_selects_correct_window(tmp_path, monkeypatch):
     assert db.count_mentions_between(14, 0) == 2
 
 
+def test_get_mentions_between_selects_correct_window_and_does_not_depend_on_recency(tmp_path, monkeypatch):
+    """get_mentions_since는 '최신순 LIMIT'이라 최근 데이터가 많으면 그보다 오래된 요청
+    구간이 통째로 잘릴 수 있다. get_mentions_between은 명시적 날짜 구간을 WHERE로 걸기
+    때문에, 아주 최근 행(very_recent)이 있어도 구간 안의 더 오래된 행(older_in_window)이
+    "최신 N건"에서 밀려나 사라지지 않고 둘 다 반환되어야 한다."""
+    _isolate(tmp_path, monkeypatch)
+    very_recent = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    older_in_window = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S")
+    too_old = (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d %H:%M:%S")
+    db.insert_mention({**_mention(url="https://x/1"), "title": "최근", "collected_at": very_recent})
+    db.insert_mention({**_mention(url="https://x/2"), "title": "구간내오래된것", "collected_at": older_in_window})
+    db.insert_mention({**_mention(url="https://x/3"), "title": "구간밖", "collected_at": too_old})
+
+    results = db.get_mentions_between(14, 0)
+
+    assert {r["title"] for r in results} == {"최근", "구간내오래된것"}
+
+
 def test_get_mentions_channels_filter_matches_any_of_the_given_channels(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     db.insert_mention(_mention(url="https://x/1", channel="네이버"))

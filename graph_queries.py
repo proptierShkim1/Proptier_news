@@ -69,6 +69,10 @@ def category_alignment_counts(
         policy_category: 조회할 정책카테고리(규제·법령/지원·사업/통계·조사/조직·인사/
             행사·홍보 중 하나). news_category가 없을 때만 쓰이며, 지정하면 대응되는
             뉴스카테고리들의 건수를 함께 반환.
+            현재 온톨로지에 정렬이 선언된 것은 뉴스카테고리 중 정책/매물/시세·감정,
+            정책카테고리 중 규제·법령/지원·사업/통계·조사뿐이다 — 나머지 카테고리를
+            주면 대응 리스트가 빈 채로 반환된다(정책적으로 대응이 없다는 뜻이 아니라
+            온톨로지에 아직 선언 안 됐다는 뜻).
         days: 최근 며칠간을 볼지 (기본 30일).
 
     Returns:
@@ -105,6 +109,8 @@ def policy_event_mention_impact(
         "before_count": int, "after_count": int, "change": int} — change는
         after_count - before_count. 발표의 카테고리와 대응되는 뉴스카테고리가 온톨로지에
         없으면 카테고리로 거르지 않고 기간 내 전체 언급을 집계한다.
+        related_news_categories도 함께 반환되어, 카테고리 필터가 실제로 적용됐는지(빈
+        리스트면 필터 없이 전체 집계) 알 수 있다.
     """
     events = cached_db.get_policy_events_since(365)
     matches = [e for e in events if policy_keyword in e.get("title", "")]
@@ -121,12 +127,15 @@ def policy_event_mention_impact(
     for category in policy_feed.categorize(event.get("title", "")):
         related_news_categories.update(ontology.aligned_news_categories(category))
 
-    fetch_days = (_today() - announced_date).days + before_days + 1
-    mentions = cached_db.get_mentions_since(fetch_days)
+    before_start_date = announced_date - timedelta(days=before_days)
+    after_end_date = announced_date + timedelta(days=after_days)
+    start_days_ago = max((_today() - before_start_date).days, 0)
+    end_days_ago = max((_today() - after_end_date).days, 0)
+    mentions = cached_db.get_mentions_between(start_days_ago, end_days_ago)
 
-    before_start = (announced_date - timedelta(days=before_days)).isoformat()
+    before_start = before_start_date.isoformat()
     announced_iso = announced_date.isoformat()
-    after_end = (announced_date + timedelta(days=after_days)).isoformat()
+    after_end = after_end_date.isoformat()
 
     before_count = 0
     after_count = 0
@@ -140,7 +149,7 @@ def policy_event_mention_impact(
                 continue
         if before_start <= m_date < announced_iso:
             before_count += 1
-        elif announced_iso <= m_date <= after_end:
+        elif announced_iso <= m_date < after_end:
             after_count += 1
 
     return {
@@ -149,6 +158,7 @@ def policy_event_mention_impact(
         "before_count": before_count,
         "after_count": after_count,
         "change": after_count - before_count,
+        "related_news_categories": sorted(related_news_categories),
     }
 
 
