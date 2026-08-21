@@ -142,3 +142,29 @@ def test_policy_event_mention_impact_asymmetric_window_fetches_enough_history(mo
 
     assert seen_days[0] >= 35  # must fetch far enough back to see the 07-18 mention
     assert result["before_count"] == 1
+
+
+def test_brand_role_category_breakdown(monkeypatch):
+    monkeypatch.setattr(
+        graph_queries.utils,
+        "load_keywords",
+        lambda: {
+            "brands": [
+                {"name": "프롭티어", "role": "own"},
+                {"name": "직방", "role": "competitor"},
+            ]
+        },
+    )
+    mentions = [
+        {"brand": "프롭티어", "title": "프롭티어 AI 신규 도입", "snippet": ""},
+        {"brand": "직방", "title": "직방 전세 매물 확대", "snippet": ""},
+        {"brand": "알수없는브랜드", "title": "매물 정보", "snippet": ""},
+    ]
+    monkeypatch.setattr(graph_queries.cached_db, "get_mentions_since", lambda days: mentions)
+
+    result = graph_queries.brand_role_category_breakdown(days=30)
+
+    assert result == {
+        "own": {"신규 도입": 1, "AI": 1, "부동산AI": 1},
+        "competitor": {"매물": 1},
+    }

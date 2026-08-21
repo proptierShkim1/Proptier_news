@@ -150,3 +150,31 @@ def policy_event_mention_impact(
         "after_count": after_count,
         "change": after_count - before_count,
     }
+
+
+def brand_role_category_breakdown(days: int = 30) -> dict:
+    """최근 N일간 언급을 브랜드 role(own/competitor/market, keywords.json 기준) ×
+    뉴스카테고리로 교차집계한다 — "경쟁사들이 어느 카테고리에서 우리보다 많이
+    언급돼?" 같은 질문에 쓴다.
+
+    Args:
+        days: 최근 며칠간을 볼지 (기본 30일).
+
+    Returns:
+        role을 키로, {카테고리명: 건수} 딕셔너리를 값으로 갖는 딕셔너리. 한 기사가
+        여러 카테고리에 동시에 해당할 수 있어 role별 합계가 전체 언급 건수보다 클 수
+        있다. keywords.json에 등록되지 않은 브랜드의 언급은 집계에서 제외된다.
+    """
+    brands = utils.load_keywords().get("brands", [])
+    role_by_brand = {b["name"]: b.get("role", "market") for b in brands}
+    mentions = cached_db.get_mentions_since(days)
+    result: dict[str, dict[str, int]] = {}
+    for m in mentions:
+        role = role_by_brand.get(m.get("brand", ""))
+        if not role:
+            continue
+        text = f"{m.get('title', '')} {m.get('snippet', '')}"
+        bucket = result.setdefault(role, {})
+        for category in news_feed.categorize(text):
+            bucket[category] = bucket.get(category, 0) + 1
+    return result
