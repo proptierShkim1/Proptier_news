@@ -21,6 +21,7 @@ from google.genai import types
 
 import cached_db
 import db
+import graph_queries
 import news_feed
 import policy_feed
 import summarizer
@@ -548,6 +549,8 @@ _STATS_TOOLS = [
     get_top_mentioned_brands, get_news_category_counts, get_policy_category_counts,
     compare_collection_periods, get_api_cost_summary, get_tracked_brands, get_pdf_report_stats,
     get_top_viewed_policy_events, search_mentions, get_brand_mention_trend, get_trending_brands,
+    graph_queries.category_alignment_counts, graph_queries.policy_event_mention_impact,
+    graph_queries.brand_role_category_breakdown,
 ]
 
 
