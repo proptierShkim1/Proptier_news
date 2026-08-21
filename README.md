@@ -13,7 +13,7 @@
 | 🔍 뉴스 검색 | 키워드·기간·부동산사 필터링 검색 |
 | 📄 PDF 보고서 | 표지 + 랭킹 1~5위 카드뉴스 형태(1080×1080, 6페이지) — 실제 다운로드 가능한 PDF 생성 |
 | 🏛️ 정책 뉴스 | 정부 정책 보도자료 전용 화면 — hero/지표, 경영진 브리핑, 발표 추이 차트, 카테고리 탭별 점수 랭킹 |
-| 🤖 AI AGENT | Gemini 기반 자유 대화형 챗봇(`st.chat_input`) — 수집 데이터(뉴스·정책)를 벡터 검색으로 찾아 답변에 근거로 사용, 지표 성격 질문(건수·비용·순위 등)은 16개 함수 호출 도구로 직접 집계해 답변, 근거가 부족하면 opt-in Hybrid Search(웹 검색) 버튼 제공 |
+| 🤖 AI AGENT | Gemini 기반 자유 대화형 챗봇(`st.chat_input`) — 수집 데이터(뉴스·정책)를 벡터 검색으로 찾아 답변에 근거로 사용, 지표 성격 질문(건수·비용·순위 등)은 22개 함수 호출 도구로 직접 집계해 답변(그중 3개는 뉴스↔정책 카테고리를 엮는 온톨로지 기반 조회), 근거가 부족하면 opt-in Hybrid Search(웹 검색) 버튼 제공 |
 | ⚙️ 설정 (관리자 전용) | 접근 제어(IP 화이트리스트) · 데이터 수집 · 데이터 관리 · 벡터 데이터(백업/복구 포함) · API 사용량 · 로그 · 서버 배포 |
 
 메뉴 순서: 오늘의 뉴스 → 부동산사 동향 → 브리핑 → 정책 뉴스 → 뉴스 검색 → PDF 보고서 → AI AGENT
@@ -204,15 +204,30 @@ summarizer.py와 같은 `.env`의 `GEMINI_API_KEYS`/`GEMINI_MODEL`을 재사용�
   도구(`types.Tool(google_search=types.GoogleSearch())`)로 같은 질문을 다시 물어 새 답변을 대화에
   이어붙인다 — 사내 데이터가 없어 애매한 답만 받고 이탈하는 걸 막기 위한 opt-in 기능.
 - **지표 성격 질문은 함수 호출(automatic function calling)로 직접 집계해 답한다.**
-  `agent_chat._STATS_TOOLS`에 16개 순수 함수(채널별 건수, 브랜드 언급 비교, API 비용, 벡터화
+  `agent_chat._STATS_TOOLS`에 22개 순수 함수(채널별 건수, 브랜드 언급 비교, API 비용, 벡터화
   진행률, 수집 상태, 정책 카테고리/순위 등)를 그대로 등록해두면 google-genai SDK가 시그니처와
   독스트링만으로 스키마를 만들고, 모델이 필요하다고 판단할 때 알아서 호출·재질의한다 — 별도 라우팅
   코드 없이 벡터 검색(문서 그라운딩)과 지표 조회(정확한 집계)를 한 대화 안에서 함께 쓸 수 있다.
-  이 16개 도구가 부르는 `db.py` 조회는 `cached_db.py`에 60초 TTL로 캐싱해 여러 사용자가 비슷한
+  이 도구들이 부르는 `db.py` 조회는 `cached_db.py`에 60초 TTL로 캐싱해 여러 사용자가 비슷한
   질문을 해도 DB 재조회를 줄인다. 또한 "몇 건", "API 비용", "벡터화 현황" 같은 키워드로 명백한
   지표 질문임을 판별하면(`agent_chat.looks_like_stats_only_question`) 벡터 검색(임베딩 API 호출
   2회)을 아예 건너뛴다 — 동시 사용자가 늘어날수록 Gemini API 키 풀에 걸리는 부담을 줄이기 위함
   (애매하면 항상 그라운딩을 시도해 근거 누락을 우선 방지).
+- **온톨로지 기반 그래프 쿼리 도구 3종** (`ontology.py` + `graph_queries.py`) — 위 지표 도구들은
+  전부 단일 테이블 집계라, "이 정책 발표 전후로 관련 뉴스가 늘었어?"처럼 뉴스카테고리와
+  정책카테고리를 엮는 질문엔 답할 수 없었다(코드 전체에 두 테이블을 잇는 JOIN이 아예 없었음).
+  `ontology.py`가 뉴스카테고리 8종 ↔ 정책카테고리 5종 중 실제로 대응되는 것만(정책/매물/시세·감정
+  ↔ 규제·법령/지원·사업/통계·조사) 정적으로 선언하고, `graph_queries.py`가 그 관계를 다리 삼아
+  `cached_db`/`categorize()`를 조합해 Python 레벨에서 조인한다 — 카테고리가 DB 컬럼이 아니라
+  `news_feed.categorize()`/`policy_feed.categorize()`로 그때그때 계산되는 값이라 SQL `JOIN`이
+  애초에 불가능했고, 스키마 변경(컬럼 추가·백필)은 이 프로젝트가 겪은 DB 손상 이력("DB 안정성 · 자동 백업/복구"
+  섹션 참고) 때문에 의도적으로 피했다. `category_alignment_counts`
+  (카테고리 간 동시발생), `policy_event_mention_impact`(정책 발표 전후 뉴스 변화 비교),
+  `brand_role_category_breakdown`(브랜드 role×카테고리 교차집계) 3개 도구로 시작했다. 최종 리뷰에서
+  `policy_event_mention_impact`가 `db.get_mentions_since`의 "최신 5000건" LIMIT 때문에 오래된
+  정책(약 1주 이상 지난)에 대해 실제로는 데이터가 있어도 조용히 0건으로 답하는 문제가 발견되어,
+  명시적 날짜 구간으로 조회하는 `db.get_mentions_between`(임베딩 컬럼 제외, LIMIT이 아니라 날짜
+  범위로 경계를 정함)을 새로 만들어 교체했다.
 
 ## 성능 · 동시 접속
 
@@ -388,6 +403,8 @@ news_feed.py        mentions 원본 → 화면 표시용 가공 (카테고리 �
 policy_feed.py      policy_events 원본 → 화면 표시용 가공 (정책 카테고리 분류·점수·메달·발표 추이)
 summarizer.py       PDF 상위 5건 전용 Gemini 기사 요약 (원문 있는 기사만, 결과는 DB에 캐싱)
 agent_chat.py       AI AGENT 페이지용 범용 Gemini 대화 (매 메시지마다 새 세션에 이력 주입 + 벡터 검색 근거 주입)
+ontology.py         뉴스카테고리↔정책카테고리 정적 대응 관계 선언 (브랜드 role은 keywords.json 재사용)
+graph_queries.py    ontology.py + cached_db/categorize()를 조합한 그래프형 조회 도구 3종 (Python 레벨 조인)
 vectorizer.py       mentions/policy_events Gemini 임베딩 벡터화(+sqlite-vec 색인) · 백그라운드 실행/이력 · 유사도 검색
 access_control.py    IP 화이트리스트 · 관리자 판별
 db.py               수집 데이터 SQLite 저장소 (WAL 모드 + synchronous=FULL + sqlite-vec 확장) + 벡터 색인/접속 로그 테이블 + 자동 백업·무결성검사·복구
