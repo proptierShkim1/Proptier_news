@@ -121,7 +121,7 @@ def policy_event_mention_impact(
     for category in policy_feed.categorize(event.get("title", "")):
         related_news_categories.update(ontology.aligned_news_categories(category))
 
-    fetch_days = max((_today() - announced_date).days + after_days, before_days) + 1
+    fetch_days = (_today() - announced_date).days + before_days + 1
     mentions = cached_db.get_mentions_since(fetch_days)
 
     before_start = (announced_date - timedelta(days=before_days)).isoformat()

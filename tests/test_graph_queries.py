@@ -121,3 +121,24 @@ def test_policy_event_mention_impact_no_alignment_counts_all_mentions(monkeypatc
 
     assert result["before_count"] == 1
     assert result["after_count"] == 1
+
+
+def test_policy_event_mention_impact_asymmetric_window_fetches_enough_history(monkeypatch):
+    monkeypatch.setattr(graph_queries, "_today", lambda: date(2026, 8, 21))
+    events = [{"title": "국토부 인사 발령", "announced_at": "2026-08-16"}]
+    # Mention 35 days before announced_at (2026-08-16 - 30 days = 2026-07-17),
+    # well outside the old buggy fetch window
+    mentions = [{"title": "전세 매물 정보", "snippet": "", "collected_at": "2026-07-18"}]
+    seen_days = []
+
+    def fake_get_mentions_since(days):
+        seen_days.append(days)
+        return mentions
+
+    monkeypatch.setattr(graph_queries.cached_db, "get_policy_events_since", lambda days: events)
+    monkeypatch.setattr(graph_queries.cached_db, "get_mentions_since", fake_get_mentions_since)
+
+    result = graph_queries.policy_event_mention_impact("인사", before_days=30, after_days=1)
+
+    assert seen_days[0] >= 35  # must fetch far enough back to see the 07-18 mention
+    assert result["before_count"] == 1
