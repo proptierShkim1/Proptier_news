@@ -70,6 +70,11 @@ def get_distinct_mention_dates() -> set:
 
 
 @st.cache_data(ttl=60, show_spinner=False)
+def get_earliest_mention_date() -> str | None:
+    return db.get_earliest_mention_date()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
 def count_mentions_by_brand(brand: str) -> int:
     return db.count_mentions_by_brand(brand)
 
@@ -160,6 +165,7 @@ def clear() -> None:
     count_policy_vector_index.clear()
     get_archived_briefing_dates.clear()
     get_distinct_mention_dates.clear()
+    get_earliest_mention_date.clear()
     count_mentions_by_brand.clear()
     get_policy_source_counts.clear()
     get_briefing_archive.clear()

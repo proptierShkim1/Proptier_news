@@ -669,6 +669,154 @@ def test_get_trending_brands_treats_zero_baseline_as_new_activity(monkeypatch):
     assert result[0]["spike_ratio"] > 0
 
 
+def test_get_collection_start_date_delegates_to_db(monkeypatch):
+    monkeypatch.setattr(agent_chat.cached_db, "get_earliest_mention_date", lambda: "2026-07-01")
+
+    assert agent_chat.get_collection_start_date() == {"earliest_date": "2026-07-01"}
+
+
+def test_get_collection_start_date_handles_no_data(monkeypatch):
+    monkeypatch.setattr(agent_chat.cached_db, "get_earliest_mention_date", lambda: None)
+
+    assert agent_chat.get_collection_start_date() == {"earliest_date": None}
+
+
+def test_get_policy_department_counts_groups_and_ranks(monkeypatch):
+    events = [
+        {"department": "주택정책과", "source": "국토부"},
+        {"department": "주택정책과", "source": "국토부"},
+        {"department": "토지정책과", "source": "국토부"},
+        {"department": "", "source": "LH"},  # 부서 없는 건 제외
+    ]
+    monkeypatch.setattr(agent_chat.cached_db, "get_policy_events_since", lambda days: events)
+
+    result = agent_chat.get_policy_department_counts(days=90, limit=10)
+
+    assert result[0] == {"department": "주택정책과", "source": "국토부", "count": 2}
+    assert result[1] == {"department": "토지정책과", "source": "국토부", "count": 1}
+    assert len(result) == 2
+
+
+def test_search_policy_events_filters_by_keyword_and_department(monkeypatch):
+    events = [
+        {"title": "재건축 규제 완화 방안", "url": "https://p/1", "source": "국토부",
+         "department": "주택정책과", "view_count": 100, "announced_at": "2026-08-20"},
+        {"title": "인사 발령 공고", "url": "https://p/2", "source": "국토부",
+         "department": "총무과", "view_count": 10, "announced_at": "2026-08-19"},
+        {"title": "재건축 관련 통계 발표", "url": "https://p/3", "source": "LH",
+         "department": "주택정책과", "view_count": 50, "announced_at": "2026-08-18"},
+    ]
+    monkeypatch.setattr(agent_chat.cached_db, "get_policy_events_since", lambda days: events)
+
+    result = agent_chat.search_policy_events(keyword="재건축", department="주택정책과", days=90)
+
+    assert [r["url"] for r in result] == ["https://p/1", "https://p/3"]
+
+
+def test_search_policy_events_returns_empty_list_when_nothing_matches(monkeypatch):
+    monkeypatch.setattr(agent_chat.cached_db, "get_policy_events_since", lambda days: [])
+
+    assert agent_chat.search_policy_events(keyword="없는키워드") == []
+
+
+def test_get_stale_channels_flags_channels_with_zero_mentions(monkeypatch):
+    _fix_now(monkeypatch, datetime(2026, 8, 26, 12, 0, 0))
+    mentions = [
+        {"channel": "네이버"}, {"channel": "네이버"}, {"channel": "구글"},
+    ]
+    monkeypatch.setattr(agent_chat.cached_db, "get_mentions_by_collected_date", lambda date: mentions)
+
+    result = agent_chat.get_stale_channels()
+
+    assert result["date"] == "2026-08-26"
+    assert result["counts"]["네이버"] == 2
+    assert result["counts"]["구글"] == 1
+    assert result["counts"]["다음"] == 0
+    assert set(result["stale_channels"]) == {"다음", "커뮤니티", "네이버뉴스API", "매경API"}
+
+
+def test_get_stale_channels_uses_explicit_date_when_given(monkeypatch):
+    monkeypatch.setattr(agent_chat.cached_db, "get_mentions_by_collected_date", lambda date: [])
+
+    result = agent_chat.get_stale_channels(date="2026-08-01")
+
+    assert result["date"] == "2026-08-01"
+
+
+def test_get_brand_snapshot_combines_count_trend_and_recent_articles(monkeypatch):
+    mentions = [
+        {"brand": "직방", "title": "직방 기사1", "url": "https://x/1", "channel": "네이버",
+         "collected_at": "2026-08-10 09:00:00"},
+        {"brand": "직방", "title": "직방 기사2", "url": "https://x/2", "channel": "다음",
+         "collected_at": "2026-08-11 09:00:00"},
+        {"brand": "다방", "title": "다방 기사", "url": "https://x/3", "channel": "네이버",
+         "collected_at": "2026-08-11 09:00:00"},
+    ]
+    monkeypatch.setattr(agent_chat.cached_db, "get_mentions_since", lambda days: mentions)
+
+    result = agent_chat.get_brand_snapshot("직방", days=30)
+
+    assert result["brand"] == "직방"
+    assert result["total_count"] == 2
+    assert result["trend"] == [{"date": "2026-08-10", "count": 1}, {"date": "2026-08-11", "count": 1}]
+    assert [a["url"] for a in result["recent_articles"]] == ["https://x/2", "https://x/1"]
+
+
+def test_get_brand_snapshot_returns_zero_count_for_untracked_brand(monkeypatch):
+    monkeypatch.setattr(agent_chat.cached_db, "get_mentions_since", lambda days: [])
+
+    result = agent_chat.get_brand_snapshot("없는브랜드", days=30)
+
+    assert result == {"brand": "없는브랜드", "total_count": 0, "trend": [], "recent_articles": []}
+
+
+def test_get_top_signal_news_returns_top_scored_items(monkeypatch):
+    fake_items = [
+        {"title": "1위 기사", "url": "https://x/1", "firm": "직방", "channel": "네이버",
+         "score": 90, "signal": "🚀 신규 도입", "categories": ["AI"]},
+        {"title": "2위 기사", "url": "https://x/2", "firm": "다방", "channel": "구글",
+         "score": 50, "signal": "🏠 매물", "categories": ["매물"]},
+    ]
+    monkeypatch.setattr(agent_chat.cached_db, "get_mentions_since", lambda days: ["dummy"])
+    monkeypatch.setattr(agent_chat.news_feed, "build_news_items", lambda mentions, own_brands: fake_items)
+
+    result = agent_chat.get_top_signal_news(days=1, limit=1)
+
+    assert result == [{
+        "title": "1위 기사", "url": "https://x/1", "firm": "직방", "channel": "네이버",
+        "score": 90, "signal": "🚀 신규 도입", "categories": ["AI"],
+    }]
+
+
+def test_get_brand_issues_filters_by_brand_and_sorts_by_latest(monkeypatch):
+    fake_issues = [
+        {"firm": "직방", "title": "오래된 이슈", "cat": "🏠 매물", "count": 2, "date": "2026-08-01",
+         "live": False, "articles": [("2026-08-01 10:00:00", "제목", "https://x/1")]},
+        {"firm": "직방", "title": "최근 이슈", "cat": "🤖 AI", "count": 3, "date": "2026-08-20",
+         "live": True, "articles": [("2026-08-20 10:00:00", "제목", "https://x/2")]},
+    ]
+    monkeypatch.setattr(agent_chat.cached_db, "get_mentions_since", lambda days: [{"brand": "직방"}])
+    monkeypatch.setattr(agent_chat.news_feed, "build_issues", lambda mentions: fake_issues)
+
+    result = agent_chat.get_brand_issues(brand="직방", days=30, limit=5)
+
+    assert result[0] == {
+        "firm": "직방", "title": "최근 이슈", "category": "🤖 AI",
+        "article_count": 3, "date": "2026-08-20", "live": True,
+    }
+    assert result[1]["title"] == "오래된 이슈"
+
+
+def test_stats_tools_include_new_easy_to_hard_tools():
+    assert agent_chat.get_collection_start_date in agent_chat._STATS_TOOLS
+    assert agent_chat.get_policy_department_counts in agent_chat._STATS_TOOLS
+    assert agent_chat.search_policy_events in agent_chat._STATS_TOOLS
+    assert agent_chat.get_stale_channels in agent_chat._STATS_TOOLS
+    assert agent_chat.get_brand_snapshot in agent_chat._STATS_TOOLS
+    assert agent_chat.get_top_signal_news in agent_chat._STATS_TOOLS
+    assert agent_chat.get_brand_issues in agent_chat._STATS_TOOLS
+
+
 def test_stats_tools_include_graph_queries_tools():
     import graph_queries
 

@@ -536,6 +536,186 @@ def get_trending_brands(recent_days: int = 3, baseline_days: int = 30, limit: in
     return results[:limit]
 
 
+def get_collection_start_date() -> dict:
+    """데이터를 언제부터 모으기 시작했는지 알려준다 — "언제부터 데이터 모았어?",
+    "누적 수집 기간이 얼마나 돼?" 같은 질문에 쓴다.
+
+    Returns:
+        {"earliest_date": "YYYY-MM-DD"} — 수집된 기사가 하나도 없으면
+        {"earliest_date": None}.
+    """
+    return {"earliest_date": cached_db.get_earliest_mention_date()}
+
+
+def get_policy_department_counts(days: int = 90, limit: int = 10) -> list[dict]:
+    """정부 정책 보도자료를 부서 단위로 세분화해서 몇 건씩 발표했는지 알려준다 —
+    get_policy_source_counts는 기관(국토부/LH/한국부동산원 등) 단위까지만 주는데,
+    "국토부 안에서 어느 부서가 제일 활발해?"처럼 더 세밀한 질문엔 이 도구를 쓴다.
+
+    Args:
+        days: 최근 며칠간을 볼지 (기본 90일 — 부서 단위는 발표가 뜸해서 넉넉하게 잡았다).
+        limit: 몇 개까지 보여줄지 (기본 10개).
+
+    Returns:
+        [{"department": str, "source": str, "count": int}, ...] 건수 내림차순.
+        department가 비어있는 보도자료는 집계에서 제외한다.
+    """
+    events = cached_db.get_policy_events_since(days)
+    counts: dict[tuple, int] = {}
+    for e in events:
+        dept = e.get("department")
+        if not dept:
+            continue
+        key = (dept, e.get("source", ""))
+        counts[key] = counts.get(key, 0) + 1
+    ranked = sorted(counts.items(), key=lambda kv: -kv[1])[:limit]
+    return [{"department": dept, "source": src, "count": c} for (dept, src), c in ranked]
+
+
+def search_policy_events(keyword: str = "", department: str = "", days: int = 90, limit: int = 5) -> list[dict]:
+    """정부 정책 보도자료를 키워드/부서로 검색해 실제 보도자료 목록(제목·링크 등)을
+    반환한다 — search_mentions의 정책 버전. "재건축 관련 정책 뭐 있었어?" 같은 질문에 쓴다.
+
+    Args:
+        keyword: 제목에 포함돼야 하는 검색어 (여러 단어는 띄어쓰기로 구분, 대소문자
+            구분 안 함). 비우면 키워드로 거르지 않는다.
+        department: 특정 부서로 제한 (예: "주택정책과"). 비우면 전체 부서 대상.
+        days: 최근 며칠간을 볼지 (기본 90일 — 정책 발표는 뉴스보다 뜸해서 뉴스 검색
+            기본값(30일)보다 넉넉하게 잡았다).
+        limit: 몇 건까지 보여줄지 (기본 5건).
+
+    Returns:
+        [{"title": str, "url": str, "source": str, "department": str,
+        "view_count": int, "announced_at": str}, ...] 발표일 내림차순. 조건에 맞는
+        보도자료가 없으면 빈 리스트.
+    """
+    events = cached_db.get_policy_events_since(days)
+    if department:
+        events = [e for e in events if e.get("department") == department]
+    terms = keyword.lower().split() if keyword else []
+    if terms:
+        events = [e for e in events if all(t in (e.get("title") or "").lower() for t in terms)]
+    events.sort(key=lambda e: e.get("announced_at", ""), reverse=True)
+    return [
+        {
+            "title": e["title"], "url": e["url"], "source": e["source"],
+            "department": e["department"], "view_count": e["view_count"],
+            "announced_at": e["announced_at"],
+        }
+        for e in events[:limit]
+    ]
+
+
+def get_stale_channels(date: str = "") -> dict:
+    """지정한 날짜(기본 오늘) 하루 동안 데이터가 하나도 안 들어온 채널이 있는지
+    알려준다 — get_collection_health는 신규게시물/네이버뉴스API/매경API/정부정책처럼
+    묶음 단위로만 "최근 실행 성공 여부"를 보는데, 이 도구는 네이버/구글/다음/커뮤니티/
+    네이버뉴스API/매경API 6개 채널 각각 실제 수집 건수가 0인지 직접 센다. "오늘 아직
+    안 들어온 채널 있어?" 같은 질문에 쓴다.
+
+    Args:
+        date: 조회할 날짜, YYYY-MM-DD. 비우면 오늘.
+
+    Returns:
+        {"date": str, "counts": {채널명: 건수}, "stale_channels": [건수가 0인 채널명 리스트]}.
+    """
+    target_date = date or datetime.now().strftime("%Y-%m-%d")
+    mentions = cached_db.get_mentions_by_collected_date(target_date)
+    counts = {ch: 0 for ch in utils.ALL_MENTION_CHANNELS}
+    for m in mentions:
+        ch = m.get("channel")
+        if ch in counts:
+            counts[ch] += 1
+    stale = [ch for ch, c in counts.items() if c == 0]
+    return {"date": target_date, "counts": counts, "stale_channels": stale}
+
+
+def get_brand_snapshot(brand: str, days: int = 30) -> dict:
+    """특정 브랜드의 최근 상황을 언급 건수·날짜별 추이·최근 기사까지 한 번에 알려준다
+    — "직방 요즘 어때?"처럼 뭉뚱그린 질문에 compare_brand_mentions/get_brand_mention_trend/
+    search_mentions를 각각 따로 부르지 않고 한 번에 답할 수 있다.
+
+    Args:
+        brand: 조회할 브랜드명.
+        days: 최근 며칠간을 볼지 (기본 30일).
+
+    Returns:
+        {"brand": str, "total_count": int, "trend": [{"date": str, "count": int}, ...],
+        "recent_articles": [{"title": str, "url": str, "channel": str,
+        "collected_at": str}, ...]} — trend는 날짜 오름차순, recent_articles는 최대
+        5건 최신순.
+    """
+    mentions = [m for m in cached_db.get_mentions_since(days) if m.get("brand") == brand]
+    counts: dict[str, int] = {}
+    for m in mentions:
+        d = (m.get("collected_at") or "")[:10]
+        if d:
+            counts[d] = counts.get(d, 0) + 1
+    trend = [{"date": d, "count": c} for d, c in sorted(counts.items())]
+    mentions.sort(key=lambda m: m.get("collected_at", ""), reverse=True)
+    recent_articles = [
+        {"title": m["title"], "url": m["url"], "channel": m["channel"], "collected_at": m["collected_at"]}
+        for m in mentions[:5]
+    ]
+    return {"brand": brand, "total_count": len(mentions), "trend": trend, "recent_articles": recent_articles}
+
+
+def get_top_signal_news(days: int = 1, limit: int = 5) -> list[dict]:
+    """최근 N일 내 수집된 뉴스 중 신호 점수(카테고리 매칭·최신성·자사 가산을 종합한
+    점수, 오늘의 뉴스 화면과 동일 기준)가 가장 높은 상위 기사를 알려준다 — search_mentions는
+    최신순으로만 정렬하는데, "오늘 진짜 중요한 뉴스가 뭐야?"처럼 단순 최신순이 아니라
+    중요도 순위가 필요한 질문엔 이 도구를 쓴다.
+
+    Args:
+        days: 최근 며칠간을 볼지 (기본 1일).
+        limit: 몇 건까지 보여줄지 (기본 5건).
+
+    Returns:
+        [{"title": str, "url": str, "firm": str, "channel": str, "score": int,
+        "signal": str, "categories": [...]}, ...] 점수 내림차순.
+    """
+    mentions = cached_db.get_mentions_since(days)
+    items = news_feed.build_news_items(mentions, news_feed.own_brand_names())
+    return [
+        {
+            "title": it["title"], "url": it["url"], "firm": it["firm"],
+            "channel": it["channel"], "score": it["score"], "signal": it["signal"],
+            "categories": it["categories"],
+        }
+        for it in items[:limit]
+    ]
+
+
+def get_brand_issues(brand: str = "", days: int = 30, limit: int = 5) -> list[dict]:
+    """같은 사건을 다루는 여러 기사를 이슈 단위로 묶어서 알려준다 — 부동산사 동향
+    화면과 같은 로직(브랜드+제목 유사도+48시간 창으로 클러스터링)을 쓴다. search_mentions는
+    낱개 기사를 그대로 나열하는데, "직방 관련 요즘 무슨 이슈 있었어?"처럼 여러 기사가
+    같은 사건을 다루는 걸 하나로 묶어 보고 싶을 때는 이 도구를 쓴다.
+
+    Args:
+        brand: 특정 브랜드로 제한 (예: "직방"). 비우면 전체 브랜드 대상.
+        days: 최근 며칠간을 볼지 (기본 30일).
+        limit: 몇 건까지 보여줄지 (기본 5건).
+
+    Returns:
+        [{"firm": str, "title": str, "category": str, "article_count": int,
+        "date": str, "live": bool}, ...] 최신 이슈 순. title은 그 이슈를 대표하는 첫
+        기사 제목이고, article_count는 같은 이슈로 묶인 기사 수, live는 진행 중(최근
+        수집)인 이슈인지 여부.
+    """
+    mentions = cached_db.get_mentions_since(days)
+    if brand:
+        mentions = [m for m in mentions if m.get("brand") == brand]
+    issues = sorted(news_feed.build_issues(mentions), key=lambda iss: iss["articles"][0][0], reverse=True)
+    return [
+        {
+            "firm": iss["firm"], "title": iss["title"], "category": iss["cat"],
+            "article_count": iss["count"], "date": iss["date"], "live": iss["live"],
+        }
+        for iss in issues[:limit]
+    ]
+
+
 _STATS_TOOLS = [
     get_channel_counts, get_overview_stats, get_brand_mention_count, get_policy_source_counts,
     get_briefing_highlights, get_collection_health, compare_brand_mentions, get_vectorization_status,
@@ -544,6 +724,8 @@ _STATS_TOOLS = [
     get_top_viewed_policy_events, search_mentions, get_brand_mention_trend, get_trending_brands,
     graph_queries.category_alignment_counts, graph_queries.policy_event_mention_impact,
     graph_queries.brand_role_category_breakdown,
+    get_collection_start_date, get_policy_department_counts, search_policy_events,
+    get_stale_channels, get_brand_snapshot, get_top_signal_news, get_brand_issues,
 ]
 
 
