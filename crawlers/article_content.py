@@ -36,7 +36,11 @@ def fetch_content(url: str) -> str:
     try:
         resp = requests.get(url, headers=_HEADERS, timeout=_TIMEOUT)
         resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
+        # resp.text는 서버가 Content-Type에 charset을 명시하지 않으면 requests가
+        # ISO-8859-1로 잘못 간주해버려(RFC 2616 구버전 기본값) EUC-KR 등을 쓰는
+        # 언론사 사이트에서 한글이 깨진다(모지바케) — resp.content(원본 바이트)를
+        # BeautifulSoup에 넘기면 <meta charset> 태그를 직접 읽어 정확히 판별한다.
+        soup = BeautifulSoup(resp.content, "html.parser")
         for selector in _CONTENT_SELECTORS:
             node = soup.select_one(selector)
             if node is None:

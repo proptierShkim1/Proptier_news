@@ -2,8 +2,8 @@ from crawlers import article_content
 
 
 class _FakeResponse:
-    def __init__(self, text, status_ok=True):
-        self.text = text
+    def __init__(self, html, status_ok=True, encoding="utf-8"):
+        self.content = html.encode(encoding)
         self._status_ok = status_ok
 
     def raise_for_status(self):
@@ -11,10 +11,10 @@ class _FakeResponse:
             raise Exception("HTTP error")
 
 
-def _mock_get(monkeypatch, html, status_ok=True):
+def _mock_get(monkeypatch, html, status_ok=True, encoding="utf-8"):
     monkeypatch.setattr(
         article_content.requests, "get",
-        lambda url, headers, timeout: _FakeResponse(html, status_ok),
+        lambda url, headers, timeout: _FakeResponse(html, status_ok, encoding),
     )
 
 
@@ -93,6 +93,27 @@ def test_fetch_content_returns_empty_string_on_http_error(monkeypatch):
     result = article_content.fetch_content("https://example.com/news/5")
 
     assert result == ""
+
+
+def test_fetch_content_decodes_euc_kr_page_without_charset_header(monkeypatch):
+    """서버가 HTTP 헤더에 charset을 안 주고 EUC-KR로 응답해도, <meta charset> 태그를
+    보고 정확히 디코딩해야 한다 — requests.text에 의존하면 ISO-8859-1로 잘못 넘겨짚어
+    한글이 모지바케로 깨지는 실제 버그(다음/조선일보 등 원문 스크래핑에서 발견됨)."""
+    html = """
+    <html><head><meta charset="euc-kr"></head><body>
+      <div id="dic_area">
+        구리시 로또 아파트 청약 경쟁률이 역대 최고 수준을 기록하며 시장의 관심이
+        집중되고 있다는 분석이 나왔다. 전문가들은 이번 청약 열기가 인근 지역
+        분양 시장 전반에도 영향을 미칠 것으로 내다봤으며, 실수요자들의 관심도
+        당분간 이어질 것으로 전망했다.
+      </div>
+    </body></html>
+    """
+    _mock_get(monkeypatch, html, encoding="euc-kr")
+
+    result = article_content.fetch_content("https://example.com/news/7")
+
+    assert "구리시 로또 아파트 청약 경쟁률이 역대 최고 수준을 기록하며" in result
 
 
 def test_fetch_content_returns_empty_string_on_request_exception(monkeypatch):

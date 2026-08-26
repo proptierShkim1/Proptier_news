@@ -31,7 +31,11 @@ _PDF_PRESUMMARY_INTERVAL_MINUTES = 5
 # 2026-08-14~19에 원인이 제각각인 DB 손상이 반복됐다(pandas 세그폴트/OOM-kill/배포
 # 재시작 타이밍/fsync 등) — 원인 하나하나를 막는 대신, 정기 백업 + 무결성 검사로
 # "깨져도 사람 개입 없이 몇 분 안에 스스로 되돌아오는" 안전망을 둔다.
-_DB_BACKUP_INTERVAL_MINUTES = 20
+# 2026-08-26: news.db가 커지면서(mentions.embedding JSON) 백업 1건이 900MB에 달해,
+# 20분마다 통째로 복사하면 그 순간 다른 요청들이 눈에 띄게 느려졌다 — 하루 1번(1440분)
+# 으로 늘려 그 I/O 부담을 줄였다. 대신 복구 시 최대 손실 가능 데이터가 20분치에서
+# 최대 24시간치로 늘어난다(db.py의 _BACKUP_KEEP=5와 합쳐 최근 5일 커버).
+_DB_BACKUP_INTERVAL_MINUTES = 24 * 60
 _DB_HEALTH_CHECK_INTERVAL_MINUTES = 10
 _last_pdf_presummary: datetime | None = None
 _last_db_backup: datetime | None = None

@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 import cached_db
 import collector
 import db
+import gemini_pricing
 import theme
 import vectorizer
 from access_control import load_config, save_config, name_for_ip
@@ -1300,7 +1301,7 @@ def _run_vector_restore_with_status(backup: dict) -> dict:
     """복구는 보통 몇 초 안에 끝나지만, 그 몇 초 동안 화면이 멈춘 것처럼 보이지 않게
     st.status()로 단계(뉴스 복구 → 정책 복구 → 색인 재생성)를 실시간으로 보여준다."""
     with st.status("벡터 백업 복구 시작...", expanded=True) as status:
-        mention_rows = backup.get("mentions", [])
+        mention_rows = vectorizer.decode_vector_backup_rows(backup.get("mentions", []))
         status.update(label=f"뉴스 임베딩 복구 중... ({len(mention_rows):,}건)")
         mention_result = db.restore_mention_embeddings_by_url(mention_rows)
         st.write(
@@ -1309,7 +1310,7 @@ def _run_vector_restore_with_status(backup: dict) -> dict:
             f"못 찾음 {mention_result['not_found']:,}건"
         )
 
-        policy_rows = backup.get("policy_events", [])
+        policy_rows = vectorizer.decode_vector_backup_rows(backup.get("policy_events", []))
         status.update(label=f"정책 임베딩 복구 중... ({len(policy_rows):,}건)")
         policy_result = db.restore_policy_event_embeddings_by_url(policy_rows)
         st.write(
@@ -1459,23 +1460,12 @@ _API_USAGE_FEATURE_LABELS = {
     "agent_chat": "🤖 AI AGENT 대화",
     "vectorizer": "🧬 벡터화(임베딩)",
 }
-# Gemini 2.5 Flash 공개 요금(2026-08 기준, USD/100만 토큰) 추정치 — 실제 청구 금액과
-# 다를 수 있다. 요금이 바뀌면 이 두 값만 갱신하면 된다.
-_PRICE_PER_1M_INPUT_USD = 0.30
-_PRICE_PER_1M_OUTPUT_USD = 2.50
-
-
-def _estimate_cost_usd(prompt_tokens: int, output_tokens: int) -> float:
-    return (
-        (prompt_tokens / 1_000_000) * _PRICE_PER_1M_INPUT_USD
-        + (output_tokens / 1_000_000) * _PRICE_PER_1M_OUTPUT_USD
-    )
-
-
 def _render_api_usage_tab():
     st.caption(
         "Gemini API 호출량과 추정 비용입니다. 실패한 호출도 건수에는 포함되지만 토큰은 "
-        "0으로 기록됩니다. 비용은 공개 요금 기준 추정치이며 실제 청구 금액과 다를 수 있습니다."
+        "0으로 기록됩니다. 벡터화(임베딩) 호출은 API가 실제 토큰 수를 안 줘서 텍스트 "
+        "길이 기반 추정치를 씁니다. 비용은 공개 요금 기준 추정치이며 실제 청구 금액과 "
+        "다를 수 있습니다."
     )
     days = st.selectbox("조회 기간(일)", [7, 30, 90], index=1, key="api_usage_days")
 
@@ -1484,7 +1474,10 @@ def _render_api_usage_tab():
     total_failed = sum(v["failed"] for v in summary.values())
     total_prompt = sum(v["prompt_tokens"] for v in summary.values())
     total_output = sum(v["output_tokens"] for v in summary.values())
-    total_cost = _estimate_cost_usd(total_prompt, total_output)
+    total_cost = sum(
+        gemini_pricing.estimate_cost_usd(feature, v["prompt_tokens"], v["output_tokens"])
+        for feature, v in summary.items()
+    )
 
     theme.metric_row([
         {"icon": "📞", "value": f"{total_calls:,}", "label": f"최근 {days}일 호출"},
@@ -1501,7 +1494,7 @@ def _render_api_usage_tab():
     st.subheader("기능별 사용량")
     rows = []
     for feature, v in summary.items():
-        cost = _estimate_cost_usd(v["prompt_tokens"], v["output_tokens"])
+        cost = gemini_pricing.estimate_cost_usd(feature, v["prompt_tokens"], v["output_tokens"])
         rows.append({
             "기능": _API_USAGE_FEATURE_LABELS.get(feature, feature),
             "호출 수": v["calls"], "실패": v["failed"],

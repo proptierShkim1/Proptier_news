@@ -8,9 +8,11 @@ search_similar_mentions()/search_similar_policy_events()로 질의 텍스트와 
 문서를 코사인 거리 기반으로 찾아 AI AGENT(agent_chat.py)의 답변 그라운딩에 쓴다.
 """
 
+import base64
 import json
 import os
 import random
+import struct
 import threading
 import uuid
 from datetime import datetime
@@ -20,11 +22,29 @@ from dotenv import load_dotenv
 from google import genai
 
 import db
+import gemini_pricing
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 _EMBEDDING_MODEL = "gemini-embedding-001"
 DEFAULT_LIMIT_PER_SOURCE = 200
+
+
+def _pack_embedding(vector: list[float]) -> bytes:
+    """벡터를 DB 저장용 압축 바이너리(float32 배열, 4바이트/개)로 변환한다. 예전에는
+    JSON 텍스트로 저장해서 숫자당 평균 13~14바이트였다 — mentions.embedding 컬럼 하나가
+    전체 DB 용량의 70%(599MB/860MB, 2026-08-26 기준)를 차지하던 근본 원인. sqlite-vec
+    색인(mention_vectors)이 이미 쓰는 것과 동일한 struct 포맷이라 값이 완전히 호환된다."""
+    return struct.pack(f"<{len(vector)}f", *vector)
+
+
+def _unpack_embedding(raw) -> list[float]:
+    """새 포맷(bytes)과 구 포맷(JSON 텍스트)을 모두 지원한다 — 마이그레이션 전 잔여
+    데이터나, DB 복구 과정에서 옛 백업이 섞여 들어온 경우를 위한 하위호환."""
+    if isinstance(raw, (bytes, bytearray)):
+        n = len(raw) // 4
+        return list(struct.unpack(f"<{n}f", raw))
+    return json.loads(raw)
 
 
 def _load_api_keys() -> list[str]:
@@ -40,17 +60,22 @@ def has_api_keys() -> bool:
 
 def embed_text(text: str) -> list[float] | None:
     """text를 Gemini로 임베딩해 실수 리스트로 반환한다. 키가 없거나 텍스트가 비었거나
-    모든 키 호출이 실패하면 None을 반환한다. 임베딩 API 응답은 토큰 사용량을 안 주므로
-    (usage_metadata 없음), 호출 성공/실패 건수만 api_usage_log에 남긴다."""
+    모든 키 호출이 실패하면 None을 반환한다. 임베딩 API 응답은 실제 토큰 사용량을 안
+    주므로(usage_metadata 없음), gemini_pricing의 글자수 기반 추정치를 prompt_tokens로
+    api_usage_log에 남긴다 — 설정 > API 사용량 탭의 추정 비용에 반영하기 위함."""
     text = (text or "").strip()
     keys = _load_api_keys()
     if not keys or not text:
         return None
+    estimated_tokens = gemini_pricing.estimate_tokens_from_text(text)
     for key in keys:
         try:
             client = genai.Client(api_key=key)
             response = client.models.embed_content(model=_EMBEDDING_MODEL, contents=text)
-            db.insert_api_usage("vectorizer", _EMBEDDING_MODEL, ok=True)
+            db.insert_api_usage(
+                "vectorizer", _EMBEDDING_MODEL, ok=True,
+                prompt_tokens=estimated_tokens, total_tokens=estimated_tokens,
+            )
             return list(response.embeddings[0].values)
         except Exception:
             db.insert_api_usage("vectorizer", _EMBEDDING_MODEL, ok=False)
@@ -84,7 +109,7 @@ def _vectorize_mentions(limit: int, trigger: str, run_id: str) -> dict:
         text = f"{row['title']}\n{row.get('content') or row.get('snippet') or ''}".strip()
         vector = embed_text(text)
         if vector:
-            db.update_mention_embedding(row["id"], json.dumps(vector))
+            db.update_mention_embedding(row["id"], _pack_embedding(vector))
             db.upsert_mention_vector(row["id"], vector)
             inserted += 1
         else:
@@ -108,7 +133,7 @@ def _vectorize_policy_events(limit: int, trigger: str, run_id: str) -> dict:
         text = f"{row['title']}\n{row.get('department', '')}".strip()
         vector = embed_text(text)
         if vector:
-            db.update_policy_event_embedding(row["id"], json.dumps(vector))
+            db.update_policy_event_embedding(row["id"], _pack_embedding(vector))
             db.upsert_policy_vector(row["id"], vector)
             inserted += 1
         else:
@@ -127,14 +152,30 @@ def _vectorize_policy_events(limit: int, trigger: str, run_id: str) -> dict:
 _FULL_REINDEX_LIMIT = 1_000_000  # sync_vector_index는 Gemini 호출이 없어 벌크 한도를 둘 필요가 없다
 
 
+def _to_transport(rows: list[dict]) -> list[dict]:
+    """DB에서 읽은 embedding(bytes)은 JSON에 그대로 못 담으므로 base64 문자열로 바꾼다."""
+    out = []
+    for r in rows:
+        raw = r["embedding"]
+        raw_bytes = raw if isinstance(raw, (bytes, bytearray)) else raw.encode("utf-8")
+        out.append({"url": r["url"], "embedding": base64.b64encode(raw_bytes).decode("ascii")})
+    return out
+
+
+def decode_vector_backup_rows(rows: list[dict]) -> list[dict]:
+    """백업 JSON에서 읽은 {url, embedding(base64 문자열)} 목록을 DB에 그대로 쓸 수 있는
+    {url, embedding(bytes)} 형태로 되돌린다 — 복구 직전에 호출한다."""
+    return [{"url": r["url"], "embedding": base64.b64decode(r["embedding"])} for r in rows]
+
+
 def export_vector_backup() -> dict:
     """mentions.embedding/policy_events.embedding을 url 키로 묶어 백업용 dict를 만든다.
     sqlite-vec 색인(mention_vectors/policy_vectors)은 이 값들로부터 언제든 재생성 가능한
     파생 데이터라 백업 대상에서 뺀다 — 실제로 잃으면 안 되는 건 임베딩 원본뿐이다."""
     return {
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "mentions": db.get_mention_embeddings_for_backup(),
-        "policy_events": db.get_policy_event_embeddings_for_backup(),
+        "mentions": _to_transport(db.get_mention_embeddings_for_backup()),
+        "policy_events": _to_transport(db.get_policy_event_embeddings_for_backup()),
     }
 
 
@@ -154,8 +195,8 @@ def sync_vector_index() -> dict:
     mention_vectors, bad_mention_ids = [], []
     for r in mention_rows:
         try:
-            mention_vectors.append((r["id"], json.loads(r["embedding"])))
-        except (json.JSONDecodeError, TypeError):
+            mention_vectors.append((r["id"], _unpack_embedding(r["embedding"])))
+        except (json.JSONDecodeError, struct.error, TypeError):
             bad_mention_ids.append(r["id"])
     db.upsert_mention_vectors_batch(mention_vectors)
     if bad_mention_ids:
@@ -165,8 +206,8 @@ def sync_vector_index() -> dict:
     policy_vectors, bad_policy_ids = [], []
     for r in policy_rows:
         try:
-            policy_vectors.append((r["id"], json.loads(r["embedding"])))
-        except (json.JSONDecodeError, TypeError):
+            policy_vectors.append((r["id"], _unpack_embedding(r["embedding"])))
+        except (json.JSONDecodeError, struct.error, TypeError):
             bad_policy_ids.append(r["id"])
     db.upsert_policy_vectors_batch(policy_vectors)
     if bad_policy_ids:

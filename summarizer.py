@@ -16,7 +16,7 @@ from google import genai
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 _DEFAULT_MODEL = "gemini-2.5-flash"
-SUMMARY_LEN = 533
+SUMMARY_LEN = 300
 
 
 def _load_api_keys() -> list[str]:

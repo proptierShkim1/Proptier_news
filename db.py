@@ -19,7 +19,11 @@ VECTOR_DIM = 3072  # gemini-embedding-001 출력 차원
 # 그 과정 자체도(컬럼 매핑 오류 등) 새 문제를 만들 수 있어 위험하다. 손상 원인 하나하나를
 # 다 막는 대신, 정기 백업 + 무결성 검사 + 자동 복구로 "깨져도 몇 분 안에 스스로 되돌아오는"
 # 쪽으로 방향을 바꾼다.
-_BACKUP_KEEP = 12
+# 2026-08-26: news.db가 860MB(대부분 mentions.embedding JSON)까지 커지면서 백업 폴더가
+# 12개×~870MB로 10GB 넘게 쌓였다. 백업 주기를 20분→하루 1번(scheduler.py의
+# _DB_BACKUP_INTERVAL_MINUTES)으로 늘린 것과 맞춰, 보관 개수도 "최근 5일"이 남도록
+# 5개로 줄였다 — 디스크는 대략 현재 수준(~4.5GB)을 유지하면서 커버 범위는 5일로 늘어난다.
+_BACKUP_KEEP = 5
 
 
 def _backup_dir() -> Path:
@@ -263,6 +267,10 @@ def _init_db_impl() -> None:
         con.execute(_mention_vectors_sql())
         con.execute(_policy_vectors_sql())
         _ensure_column(con, "mentions", "summary", "TEXT NOT NULL DEFAULT ''")
+        # embedding은 선언은 TEXT지만 실제로는 압축 바이너리(bytes, vectorizer._pack_embedding
+        # 참고)를 저장한다 — SQLite는 동적 타이핑이라 BLOB 값을 TEXT 컬럼에 그대로 저장할 수
+        # 있어(타입 강제 변환 없음) 컬럼 선언을 바꾸는 마이그레이션 없이도 문제없다. 값이
+        # 없을 때(아직 벡터화 전)는 지금처럼 빈 문자열 ''을 그대로 쓴다.
         _ensure_column(con, "mentions", "embedding", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(con, "policy_events", "embedding", "TEXT NOT NULL DEFAULT ''")
         con.execute("CREATE INDEX IF NOT EXISTS idx_mentions_collected_at ON mentions(collected_at)")
@@ -650,21 +658,23 @@ def get_policy_run_batches(limit: int = 50) -> list[dict]:
     return batches[:limit]
 
 
-def update_mention_embedding(mention_id: int, embedding_json: str) -> None:
+def update_mention_embedding(mention_id: int, embedding: bytes) -> None:
+    """embedding은 vectorizer._pack_embedding()이 만든 압축 바이너리(float32 배열)다 —
+    이 함수는 형식을 모르는 순수 저장 계층이라 그대로 쓴다."""
     init_db()
     with _connect() as con:
         con.execute(
             "UPDATE mentions SET embedding = :embedding WHERE id = :id",
-            {"embedding": embedding_json, "id": mention_id},
+            {"embedding": embedding, "id": mention_id},
         )
 
 
-def update_policy_event_embedding(event_id: int, embedding_json: str) -> None:
+def update_policy_event_embedding(event_id: int, embedding: bytes) -> None:
     init_db()
     with _connect() as con:
         con.execute(
             "UPDATE policy_events SET embedding = :embedding WHERE id = :id",
-            {"embedding": embedding_json, "id": event_id},
+            {"embedding": embedding, "id": event_id},
         )
 
 

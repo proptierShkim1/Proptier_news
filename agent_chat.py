@@ -21,6 +21,7 @@ from google.genai import types
 
 import cached_db
 import db
+import gemini_pricing
 import graph_queries
 import news_feed
 import policy_feed
@@ -363,17 +364,12 @@ def compare_collection_periods(period_days: int = 7) -> dict:
     }
 
 
-# views/settings.py의 "API 사용량" 탭과 동일한 추정 단가(USD/100만 토큰) — 하나를
-# 바꾸면 다른 쪽도 같이 갱신할 것.
-_PRICE_PER_1M_INPUT_USD = 0.30
-_PRICE_PER_1M_OUTPUT_USD = 2.50
-
-
 def get_api_cost_summary(days: int = 30) -> dict:
     """Gemini API 호출량과 추정 비용을 알려준다 — "이번 달 API 비용 얼마야?" 같은 질문에
     쓴다. 기능별(summarizer=기사요약/agent_chat=AI AGENT 대화/vectorizer=임베딩) 호출
     수·토큰·추정 비용과 전체 합계를 담는다. 비용은 공개 요금 기준 추정치이며 실제
-    청구 금액과 다를 수 있다.
+    청구 금액과 다를 수 있다. vectorizer의 토큰 수는 임베딩 API가 실제 사용량을 안 줘서
+    텍스트 길이 기반 추정치다(gemini_pricing.estimate_tokens_from_text).
 
     Args:
         days: 최근 며칠간을 볼지 (기본 30일).
@@ -389,10 +385,7 @@ def get_api_cost_summary(days: int = 30) -> dict:
     total_calls = 0
     total_tokens = 0
     for feature, v in summary.items():
-        cost = (
-            (v["prompt_tokens"] / 1_000_000) * _PRICE_PER_1M_INPUT_USD
-            + (v["output_tokens"] / 1_000_000) * _PRICE_PER_1M_OUTPUT_USD
-        )
+        cost = gemini_pricing.estimate_cost_usd(feature, v["prompt_tokens"], v["output_tokens"])
         by_feature[feature] = {
             "calls": v["calls"], "tokens": v["tokens"], "failed": v["failed"],
             "estimated_cost_usd": round(cost, 4),

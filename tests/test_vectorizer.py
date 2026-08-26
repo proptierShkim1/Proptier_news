@@ -1,3 +1,4 @@
+import base64
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -87,7 +88,11 @@ def test_embed_text_logs_api_usage_on_success(monkeypatch):
          patch.object(vectorizer.db, "insert_api_usage") as mock_usage:
         vectorizer.embed_text("텍스트")
 
-    mock_usage.assert_called_once_with("vectorizer", vectorizer._EMBEDDING_MODEL, ok=True)
+    expected_tokens = vectorizer.gemini_pricing.estimate_tokens_from_text("텍스트")
+    mock_usage.assert_called_once_with(
+        "vectorizer", vectorizer._EMBEDDING_MODEL, ok=True,
+        prompt_tokens=expected_tokens, total_tokens=expected_tokens,
+    )
 
 
 def test_embed_text_logs_api_usage_as_failed_when_all_keys_fail(monkeypatch):
@@ -118,9 +123,10 @@ def test_vectorize_pending_embeds_mentions_and_policy_events_separately():
          patch("db.insert_vector_run_log") as mock_log:
         result = vectorizer.vectorize_pending(run_id="fixed-run")
 
+    packed = vectorizer._pack_embedding([0.1, 0.2])
     assert mock_embed.call_count == 2
-    mock_update_mention.assert_called_once_with(1, "[0.1, 0.2]")
-    mock_update_policy.assert_called_once_with(2, "[0.1, 0.2]")
+    mock_update_mention.assert_called_once_with(1, packed)
+    mock_update_policy.assert_called_once_with(2, packed)
     mock_upsert_mention.assert_called_once_with(1, [0.1, 0.2])
     mock_upsert_policy.assert_called_once_with(2, [0.1, 0.2])
     assert result["run_id"] == "fixed-run"
@@ -181,14 +187,54 @@ def test_sync_vector_index_clears_and_skips_rows_with_unparseable_embedding():
     assert result == {"mentions": 1, "policy_events": 0}
 
 
-def test_export_vector_backup_bundles_mentions_and_policy_events():
-    with patch("db.get_mention_embeddings_for_backup", return_value=[{"url": "u1", "embedding": "[0.1]"}]), \
-         patch("db.get_policy_event_embeddings_for_backup", return_value=[{"url": "u2", "embedding": "[0.2]"}]):
+def test_export_vector_backup_base64_encodes_binary_embeddings():
+    """embedding은 DB에 압축 바이너리(bytes)로 저장돼 있어 JSON에 그대로 못 담으므로,
+    백업 파일용으로는 base64 문자열로 바꿔서 담아야 한다."""
+    packed = vectorizer._pack_embedding([0.1, 0.2])
+    with patch("db.get_mention_embeddings_for_backup", return_value=[{"url": "u1", "embedding": packed}]), \
+         patch("db.get_policy_event_embeddings_for_backup", return_value=[{"url": "u2", "embedding": packed}]):
         backup = vectorizer.export_vector_backup()
 
-    assert backup["mentions"] == [{"url": "u1", "embedding": "[0.1]"}]
-    assert backup["policy_events"] == [{"url": "u2", "embedding": "[0.2]"}]
+    assert backup["mentions"] == [{"url": "u1", "embedding": base64.b64encode(packed).decode("ascii")}]
+    assert backup["policy_events"] == [{"url": "u2", "embedding": base64.b64encode(packed).decode("ascii")}]
     assert "created_at" in backup
+
+
+def test_decode_vector_backup_rows_reverses_export_encoding():
+    packed = vectorizer._pack_embedding([0.1, 0.2, 0.3])
+    with patch("db.get_mention_embeddings_for_backup", return_value=[{"url": "u1", "embedding": packed}]), \
+         patch("db.get_policy_event_embeddings_for_backup", return_value=[]):
+        backup = vectorizer.export_vector_backup()
+
+    decoded = vectorizer.decode_vector_backup_rows(backup["mentions"])
+
+    assert decoded == [{"url": "u1", "embedding": packed}]
+
+
+def test_pack_and_unpack_embedding_round_trip():
+    vector = [0.1, -0.25, 3.5, 0.0]
+    packed = vectorizer._pack_embedding(vector)
+
+    unpacked = vectorizer._unpack_embedding(packed)
+
+    assert unpacked == pytest.approx(vector, abs=1e-6)
+
+
+def test_unpack_embedding_still_reads_legacy_json_text():
+    assert vectorizer._unpack_embedding("[0.1, 0.2]") == [0.1, 0.2]
+
+
+def test_sync_vector_index_reads_new_binary_embedding_format():
+    packed = vectorizer._pack_embedding([0.1, 0.2])
+    with patch("db.get_mentions_missing_vector_index", return_value=[{"id": 1, "embedding": packed}]), \
+         patch("db.get_policy_events_missing_vector_index", return_value=[]), \
+         patch("db.upsert_mention_vectors_batch") as mock_upsert_mention, \
+         patch("db.upsert_policy_vectors_batch"):
+        vectorizer.sync_vector_index()
+
+    [(mention_id, vector)] = mock_upsert_mention.call_args[0][0]
+    assert mention_id == 1
+    assert vector == pytest.approx([0.1, 0.2], abs=1e-6)
 
 
 def test_search_similar_mentions_returns_empty_list_when_embedding_fails():

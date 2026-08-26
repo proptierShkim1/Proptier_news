@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 import streamlit as st
 
@@ -31,11 +31,10 @@ def _archive_card_html(item: dict, rank: str) -> str:
 
 
 def _render_news_list(title: str, note: str, items: list) -> None:
+    if not items:
+        return
     st.markdown(f'<h2 class="sec">{title}</h2>', unsafe_allow_html=True)
     st.markdown(f'<div class="sec-note">{note}</div>', unsafe_allow_html=True)
-    if not items:
-        st.caption("해당 소식 없음")
-        return
     for i, it in enumerate(items):
         st.markdown(_archive_card_html(it, _rank(i)), unsafe_allow_html=True)
 
@@ -49,13 +48,12 @@ def _render_channel_counts(date_str: str, total_count: int, counts: dict) -> Non
     metrics = [{"icon": "🗞️", "value": f"{total_count:,}", "label": "전체"}] + [
         {"icon": "📡", "value": f"{n:,}", "label": ch} for ch, n in ranked
     ]
-    # 이 화면의 지표 타일은 좁은 오른쪽 패널(전체 폭의 약 70%) 안에 들어가므로, 채널이
-    # 많을 때(5~6개) 한 줄에 다 넣으면 타일이 밀려 좁아진다 — 한 줄에 최대 3개로 줄바꿈.
-    # theme.metric_row(chunk)를 그대로 쓰면 마지막 줄(예: 3,3,1일 때 1개)의 컬럼 폭이
-    # st.columns(len(chunk))로 매번 다시 계산돼 앞줄의 3등분 타일보다 넓어져 크기가 안
-    # 맞아 보인다 — 항상 고정으로 3칸을 만들고 남는 칸은 비워둬서 모든 타일 크기를
+    # 채널이 많을 때(5~6개) 한 줄에 다 넣으면 타일이 밀려 좁아진다 — 한 줄에 최대 4개로 줄바꿈.
+    # theme.metric_row(chunk)를 그대로 쓰면 마지막 줄(예: 4,4,1일 때 1개)의 컬럼 폭이
+    # st.columns(len(chunk))로 매번 다시 계산돼 앞줄의 4등분 타일보다 넓어져 크기가 안
+    # 맞아 보인다 — 항상 고정으로 4칸을 만들고 남는 칸은 비워둬서 모든 타일 크기를
     # 동일하게 유지한다.
-    row_size = 3
+    row_size = 4
     for i in range(0, len(metrics), row_size):
         row = metrics[i:i + row_size]
         cols = st.columns(row_size)
@@ -66,30 +64,58 @@ def _render_channel_counts(date_str: str, total_count: int, counts: dict) -> Non
             """, unsafe_allow_html=True)
 
 
-def _render_channel_top_news(channel_top_news: dict) -> None:
-    st.markdown('<h2 class="sec">채널별 주요 뉴스</h2>', unsafe_allow_html=True)
-    st.markdown('<div class="sec-note">채널별로 가장 점수가 높은 기사를 모았습니다.</div>', unsafe_allow_html=True)
-    if not channel_top_news:
-        st.caption("수집된 데이터 없음")
-        return
-    channels = list(channel_top_news.keys())
-    tabs = st.tabs(channels)
-    for ch, tab in zip(channels, tabs):
-        with tab:
-            items = channel_top_news[ch]
-            if not items:
-                st.caption("해당 소식 없음")
-                continue
-            for i, it in enumerate(items):
-                st.markdown(_archive_card_html(it, _rank(i)), unsafe_allow_html=True)
+def _ordinal_day(d: date) -> str:
+    n = d.day
+    suffix = "th" if 11 <= n % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def _calendar_label_fragment(d: date) -> str:
+    """st.date_input이 그리는 BaseWeb 달력의 각 날짜 셀은 `aria-label`에
+    "Choose Wednesday, August 24th 2026. It's available." 형식의 영문 문자열을 담는다
+    (선택된 날짜는 "Selected. ...", 범위 밖은 "Not available. ..."로 접두사만 다름).
+    "August 24th 2026"처럼 월 이름이 앞에 고정으로 붙는 부분만 뽑아 부분일치 셀렉터로
+    쓰면, hashed CSS 클래스명(st-xx)과 달리 Streamlit 버전이 바뀌어도 잘 안 깨진다."""
+    return f"{d.strftime('%B')} {_ordinal_day(d)} {d.year}"
+
+
+def _calendar_marker_rule(dates: set, dot_style: str) -> str:
+    selectors = [f'[aria-label*="{_calendar_label_fragment(d)}"]' for d in sorted(dates)]
+    if not selectors:
+        return ""
+    base = ", ".join(selectors)
+    # BaseWeb 달력이 선택/오늘 표시에 이미 ::after 의사요소를 자체적으로 쓰고 있어서
+    # (선택된 날짜 뒤의 둥근 배경 하이라이트가 바로 그것) 여기서 ::after를 덮어쓰면
+    # 그 표시가 우리 점으로 통째로 바뀌어버린다 — 안 쓰는 ::before를 대신 쓴다.
+    marker = ", ".join(f"{s}::before" for s in selectors)
+    return f"""
+    {base} {{ position: relative !important; }}
+    {marker} {{
+      content:"" !important; position:absolute !important; left:50% !important;
+      bottom:4px !important; top:auto !important; transform:translateX(-50%) !important;
+      width:5px !important; height:5px !important; border-radius:50% !important;
+      {dot_style}
+    }}
+    """
+
+
+def _calendar_marker_css(confirmed: set, pending: set) -> str:
+    """달력 팝업에서 아카이빙 자료가 있는 날짜 밑에 작은 점을 표시한다 — 확정된
+    날짜는 진한 점, 아직 확정 전(오늘 등)인 날짜는 테두리만 있는 점으로 구분한다."""
+    css = (
+        _calendar_marker_rule(confirmed, "background:var(--hana) !important; border:none !important;")
+        + _calendar_marker_rule(
+            pending, "background:transparent !important; border:1px solid var(--hana) !important;"
+        )
+    )
+    return f"<style>{css}</style>" if css.strip() else ""
 
 
 def _render_sections(date_str: str, content: dict) -> None:
     _render_channel_counts(date_str, content["total_count"], content["channel_counts"])
-    _render_channel_top_news(content["channel_top_news"])
-    _render_news_list("🏠 프롭티어 관련 뉴스", "자사 관련 소식만 모았습니다.", content["own_brand_news"])
-    _render_news_list("⚔️ 경쟁사 동향", "경쟁사 관련 소식만 모았습니다.", content["competitor_news"])
-    _render_news_list("🌐 시장 동향", "AI·프롭테크 등 시장 전반의 소식입니다.", content["market_news"])
+    _render_news_list("🏠 프롭티어 관련 뉴스 TOP3", "자사 관련 소식 상위 3건입니다.", content["own_brand_news"][:3])
+    _render_news_list("⚔️ 경쟁사 동향 TOP3", "경쟁사 관련 소식 상위 3건입니다.", content["competitor_news"][:3])
+    _render_news_list("🌐 시장 동향 TOP3", "AI·프롭테크 등 시장 전반 소식 상위 3건입니다.", content["market_news"][:3])
 
 
 def render():
@@ -117,37 +143,43 @@ def render():
 
     theme.hero(
         "\U0001F4DD 브리핑 아카이브",
-        f"확정된 브리핑 {len(archived_dates):,}건 · 왼쪽 목록에서 날짜를 고르세요",
+        f"확정된 브리핑 {len(archived_dates):,}건 · 달력에서 날짜를 고르세요",
     )
 
-    if "briefing_date_idx" not in st.session_state or st.session_state.briefing_date_idx >= len(dates):
-        st.session_state.briefing_date_idx = 0
+    date_objs = [datetime.strptime(d, "%Y-%m-%d").date() for d in dates]
+    min_d, max_d = min(date_objs), max(date_objs)
+    dates_with_data = set(dates)
 
-    list_col, panel_col = st.columns([1, 2.4])
+    if "briefing_selected_date" not in st.session_state:
+        st.session_state.briefing_selected_date = date_objs[0]
 
-    with list_col:
-        for i, d in enumerate(dates):
-            selected = i == st.session_state.briefing_date_idx
-            prefix = "\U0001F449 " if selected else ""
-            label = f"{d} (진행중)" if d == today_str and has_today else d
-            if st.button(f"{prefix}{label}", key=f"bf_{i}", use_container_width=True):
-                st.session_state.briefing_date_idx = i
-                st.rerun()
+    confirmed_objs = {datetime.strptime(d, "%Y-%m-%d").date() for d in archived_dates}
+    pending_objs = {d for d in date_objs if d not in confirmed_objs}
+    marker_css = _calendar_marker_css(confirmed_objs, pending_objs)
+    if marker_css:
+        st.markdown(marker_css, unsafe_allow_html=True)
 
-    with panel_col:
-        picked_date = dates[st.session_state.briefing_date_idx]
-        if picked_date == today_str and has_today:
-            st.info("\U0001F504 오늘은 아직 진행 중입니다 — 자정이 지나면 자동으로 확정됩니다.")
-            content = news_feed.build_briefing_archive_content(
-                today_mentions, news_feed.own_brand_names(),
-                news_feed.competitor_brand_names(), news_feed.market_brand_names(),
-            )
-            _render_sections(today_str, content)
+    picked = st.date_input(
+        "\U0001F4C5 날짜 선택 (● 확정된 아카이브 · ○ 집계 중)",
+        min_value=min_d, max_value=max_d, format="YYYY-MM-DD",
+        key="briefing_selected_date",
+    )
+    picked_date = picked.strftime("%Y-%m-%d")
+
+    if picked_date == today_str and has_today:
+        st.info("\U0001F504 오늘은 아직 진행 중입니다 — 자정이 지나면 자동으로 확정됩니다.")
+        content = news_feed.build_briefing_archive_content(
+            today_mentions, news_feed.own_brand_names(),
+            news_feed.competitor_brand_names(), news_feed.market_brand_names(),
+        )
+        _render_sections(today_str, content)
+    elif picked_date not in dates_with_data:
+        st.warning(f"{picked_date}에는 수집된 데이터가 없습니다. 데이터 보유 기간: {min_d} ~ {max_d}")
+    else:
+        archive = db.get_briefing_archive(picked_date)
+        if archive is None:
+            st.info("⏳ 아직 확정 전입니다 — 스케줄러가 곧 처리합니다.")
         else:
-            archive = db.get_briefing_archive(picked_date)
-            if archive is None:
-                st.info("⏳ 아직 확정 전입니다 — 스케줄러가 곧 처리합니다.")
-            else:
-                _render_sections(archive["date"], archive)
+            _render_sections(archive["date"], archive)
 
     theme.footer("확정된 날짜는 고정 기록 · 오늘은 실시간 집계")
