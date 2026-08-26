@@ -149,6 +149,19 @@ def _sftp_mkdir_p(sftp, remote: str):
 
 _DATA_UPLOAD_SKIP_PREFIXES = ("news.db.corrupted-", "news.db.autofailed-", "news.db.backup-")
 
+# 배포 대상(DEPLOY_HOST 등) 설정 키 — 서버에 올리는 .env에서는 뺀다. 그대로 올리면
+# 배포된 서버 자신의 설정 화면에도 "배포" 탭이 (같은 접속정보로) 그대로 살아나, 관리자가
+# 그 서버에서 "서버에 배포"를 누르면 자기 자신에게 재배포를 실행하게 된다 — 2026-08-19
+# DB 손상 사고의 실제 트리거가 이 자기참조 배포였다. 서버는 애초에 자기 자신을 배포
+# 대상으로 알 필요가 없다.
+_ENV_UPLOAD_EXCLUDE_PREFIX = "DEPLOY_"
+
+
+def _filtered_env_content(local_path: Path) -> str:
+    lines = local_path.read_text(encoding="utf-8").splitlines()
+    kept = [ln for ln in lines if not ln.strip().startswith(_ENV_UPLOAD_EXCLUDE_PREFIX)]
+    return "\n".join(kept) + "\n"
+
 
 def _sftp_upload_dir(sftp, local_dir: Path, remote_dir: str, log, skip_names: set = frozenset()):
     _sftp_mkdir_p(sftp, remote_dir)
@@ -204,7 +217,11 @@ def _deploy():
         log("\n--- 코드 업로드 ---")
         for item in sorted(ROOT.iterdir()):
             if item.is_file() and (item.suffix in _UPLOAD_SUFFIXES or item.name in _UPLOAD_ROOT_EXTRAS):
-                sftp.put(str(item), f"{_DEPLOY_REMOTE}/{item.name}")
+                if item.name == ".env":
+                    with sftp.open(f"{_DEPLOY_REMOTE}/{item.name}", "w") as f:
+                        f.write(_filtered_env_content(item))
+                else:
+                    sftp.put(str(item), f"{_DEPLOY_REMOTE}/{item.name}")
                 log(f"↑ {item.name}")
         for dir_name in _UPLOAD_DIRS:
             local_sub = ROOT / dir_name
@@ -1530,11 +1547,15 @@ def _render_agent_settings_tab():
 
 def render():
     st.title("⚙️ 설정")
-    _render_lazy_tabs(
-        ["🔐 접근 제어", "🔄 데이터 수집", "🗃 데이터 관리", "🧬 벡터 데이터", "🤖 AI AGENT",
-         "💳 API 사용량", "📋 로그", "🚀 배포"],
-        "main_tab",
-        [_render_access_control, _render_data_collection, _render_data_management,
-         _render_vector_data_tab, _render_agent_settings_tab, _render_api_usage_tab,
-         _render_activity_log_tab, _render_deploy],
-    )
+    labels = ["🔐 접근 제어", "🔄 데이터 수집", "🗃 데이터 관리", "🧬 벡터 데이터", "🤖 AI AGENT",
+              "💳 API 사용량", "📋 로그"]
+    render_fns = [_render_access_control, _render_data_collection, _render_data_management,
+                  _render_vector_data_tab, _render_agent_settings_tab, _render_api_usage_tab,
+                  _render_activity_log_tab]
+    # DEPLOY_HOST가 없으면(=원격 배포 대상으로 쓰이는 이 서버 자신에게는 배포 설정을
+    # 안 올리므로, _filtered_env_content 참고) 탭 자체를 안 보이게 한다 — 로컬 개발
+    # 환경에서만 이 탭이 보인다.
+    if _DEPLOY_HOST:
+        labels.append("🚀 배포")
+        render_fns.append(_render_deploy)
+    _render_lazy_tabs(labels, "main_tab", render_fns)

@@ -65,6 +65,11 @@ def get_archived_briefing_dates() -> set:
 
 
 @st.cache_data(ttl=60, show_spinner=False)
+def get_distinct_mention_dates() -> set:
+    return db.get_distinct_mention_dates()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
 def count_mentions_by_brand(brand: str) -> int:
     return db.count_mentions_by_brand(brand)
 
@@ -154,6 +159,7 @@ def clear() -> None:
     count_mention_vector_index.clear()
     count_policy_vector_index.clear()
     get_archived_briefing_dates.clear()
+    get_distinct_mention_dates.clear()
     count_mentions_by_brand.clear()
     get_policy_source_counts.clear()
     get_briefing_archive.clear()

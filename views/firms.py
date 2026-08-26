@@ -52,17 +52,18 @@ def render():
         "실제 수집(mentions) 데이터를 건별 이슈 카드로 표시",
     )
 
-    st.markdown('<div class="sc-box">', unsafe_allow_html=True)
-    query = st.text_input(
-        "검색어", placeholder="검색어 입력 — 여러 단어는 띄어쓰기 (모두 포함된 이슈만 표시)",
-        label_visibility="collapsed", key="firms_search_query",
-    )
     period = st.segmented_control(
         "\U0001F5D3️ 이슈 기간", list(_PERIOD_DAYS.keys()),
         default="누적 전체", label_visibility="collapsed",
     )
-    firm_pick = st.selectbox("\U0001F3E2 부동산사 필터", ["전체"] + firms)
-    st.markdown('</div>', unsafe_allow_html=True)
+    col_search, col_filter = st.columns(2)
+    with col_search:
+        query = st.text_input(
+            "검색어", placeholder="검색어 입력 — 여러 단어는 띄어쓰기 (모두 포함된 이슈만 표시)",
+            label_visibility="collapsed", key="firms_search_query",
+        )
+    with col_filter:
+        firm_pick = st.selectbox("\U0001F3E2 부동산사 필터", ["전체"] + firms, label_visibility="collapsed")
     period = period or "누적 전체"
 
     days = _PERIOD_DAYS[period]

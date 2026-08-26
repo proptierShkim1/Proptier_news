@@ -2,7 +2,7 @@ from datetime import date, datetime
 
 import streamlit as st
 
-import db
+import cached_db
 import news_feed
 import theme
 from utils import escape_html
@@ -119,19 +119,23 @@ def _render_sections(date_str: str, content: dict) -> None:
 
 
 def render():
-    archived_dates = sorted(db.get_archived_briefing_dates(), reverse=True)
+    # cached_db(60초 TTL)를 거쳐 조회한다 — 예전엔 매 렌더링(달력에서 날짜 하나 고를
+    # 때마다 스크립트가 처음부터 다시 실행됨)마다 이 네 조회를 매번 새로 했는데, 그중
+    # get_distinct_mention_dates()는 date(collected_at)에 인덱스가 없어 전체 mentions를
+    # 스캔하는 무거운 쿼리라 브리핑 화면이 느려지는 주 원인이었다. 확정된 과거 날짜의
+    # 아카이브 내용(get_briefing_archive)은 한 번 쓰이면 절대 안 바뀌므로(archive_pending_briefings가
+    # INSERT OR IGNORE로 확정) 캐싱해도 안전하고, 나머지도 60초 지연은 이 앱의 수집 주기에
+    # 비하면 무시할 수준이다.
+    archived_dates = sorted(cached_db.get_archived_briefing_dates(), reverse=True)
     today_str = date.today().strftime("%Y-%m-%d")
 
-    # 오늘의 미리보기는 내일 확정될 아카이브와 정확히 같은 기준(채널 노출 설정 무관,
-    # 건수 제한 없음)으로 계산해야 한다 — cached_db.get_mentions(limit=BROAD_LIMIT)를
-    # 쓰면 1000건 넘는 날 미리보기와 실제 확정본의 총 건수가 달라져 보인다.
-    today_mentions = db.get_mentions_by_collected_date(today_str)
+    today_mentions = cached_db.get_mentions_by_collected_date(today_str)
     has_today = bool(today_mentions)
 
     # 확정된 날짜 + "데이터는 있지만 아직 확정 안 된" 과거 날짜(오늘 제외)를 합쳐서
     # 목록에 노출한다 — 배포 직후 첫 스케줄러 tick 전이거나 스케줄러 스레드가 죽은
     # 경우에도 그 날짜가 목록에서 아예 사라지지 않게 한다.
-    unarchived_with_data = db.get_distinct_mention_dates() - set(archived_dates) - {today_str}
+    unarchived_with_data = cached_db.get_distinct_mention_dates() - set(archived_dates) - {today_str}
     other_dates = sorted(set(archived_dates) | unarchived_with_data, reverse=True)
     dates = ([today_str] if has_today else []) + [d for d in other_dates if d != today_str]
 
@@ -176,7 +180,7 @@ def render():
     elif picked_date not in dates_with_data:
         st.warning(f"{picked_date}에는 수집된 데이터가 없습니다. 데이터 보유 기간: {min_d} ~ {max_d}")
     else:
-        archive = db.get_briefing_archive(picked_date)
+        archive = cached_db.get_briefing_archive(picked_date)
         if archive is None:
             st.info("⏳ 아직 확정 전입니다 — 스케줄러가 곧 처리합니다.")
         else:

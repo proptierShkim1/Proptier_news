@@ -43,7 +43,7 @@ CSS = """
 .hero-side .hs-note {font-size:.72rem; color:rgba(255,255,255,.68); margin-top:4px;}
 
 .metric-box {background:rgba(255,255,255,.92); border:1px solid var(--line); border-radius:17px;
-             padding:16px 18px 15px; box-shadow:var(--shadow-sm);}
+             padding:16px 18px 15px; box-shadow:var(--shadow-sm); margin-bottom:16px;}
 .metric-box .mi {display:inline-grid; place-items:center; width:28px; height:28px; float:right;
              background:#fff1e0; border-radius:9px; font-size:.82rem;}
 .metric-box .v {font-size:1.5rem; font-weight:850; letter-spacing:-.6px; color:var(--hana-dark); line-height:1.1;}
@@ -158,9 +158,6 @@ h2.sec::before {content:"INTELLIGENCE RANKING"; font-size:.61rem; letter-spacing
       font-weight:700; color:var(--ink-soft);}
 .bf-item.on, .bf-item:hover {border-color:var(--hana); color:var(--hana-deep); background:var(--hana-mint);}
 
-/* ----- 뉴스 검색 ----- */
-.sc-box {background:#fff; border:1px solid var(--line); border-radius:16px; padding:16px 18px;
-      box-shadow:var(--shadow-sm); margin-bottom:14px;}
 .plabel {font-size:.78rem; font-weight:700; color:var(--muted);}
 </style>
 """

@@ -86,13 +86,14 @@ def render():
         with st.popover("❓"):
             st.markdown(policy_feed.category_legend_markdown())
 
-    st.markdown('<div class="sc-box">', unsafe_allow_html=True)
-    query = st.text_input(
-        "검색어", placeholder="검색어 입력 — 여러 단어는 띄어쓰기 (모두 포함된 보도자료만 표시)",
-        label_visibility="collapsed", key="policy_search_query",
-    )
-    source_pick = st.selectbox("기관 필터", ["전체"] + _SOURCES)
-    st.markdown('</div>', unsafe_allow_html=True)
+    col_search, col_filter = st.columns(2)
+    with col_search:
+        query = st.text_input(
+            "검색어", placeholder="검색어 입력 — 여러 단어는 띄어쓰기 (모두 포함된 보도자료만 표시)",
+            label_visibility="collapsed", key="policy_search_query",
+        )
+    with col_filter:
+        source_pick = st.selectbox("기관 필터", ["전체"] + _SOURCES, label_visibility="collapsed")
 
     filtered_events = events if source_pick == "전체" else [e for e in events if e["source"] == source_pick]
     terms = query.lower().split() if query else []

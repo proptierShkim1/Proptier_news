@@ -1,4 +1,4 @@
-from views.settings import _escape_html_attr, _sftp_upload_dir, _DATA_UPLOAD_SKIP
+from views.settings import _escape_html_attr, _filtered_env_content, _sftp_upload_dir, _DATA_UPLOAD_SKIP
 
 
 class _FakeSFTP:
@@ -39,6 +39,37 @@ def test_sftp_upload_dir_skips_stale_wal_shm_sidecars(tmp_path, monkeypatch):
     assert "news.db-wal" not in uploaded_names
     assert "news.db-shm" not in uploaded_names
     assert "collector_state.py" in uploaded_names
+
+
+def test_filtered_env_content_strips_deploy_keys(tmp_path):
+    """배포 대상 서버 자신의 .env에는 DEPLOY_HOST 등이 없어야 한다 — 있으면 그 서버의
+    설정 화면에도 "배포" 탭이 살아나 자기 자신에게 재배포를 실행할 수 있게 된다."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "GEMINI_API_KEYS=abc,def\n"
+        "DEPLOY_HOST=192.168.10.169\n"
+        "DEPLOY_USER=admin\n"
+        "DEPLOY_PASS=secret\n"
+        "NAVER_CLIENT_ID=xyz\n",
+        encoding="utf-8",
+    )
+
+    result = _filtered_env_content(env_file)
+
+    assert "GEMINI_API_KEYS=abc,def" in result
+    assert "NAVER_CLIENT_ID=xyz" in result
+    assert "DEPLOY_HOST" not in result
+    assert "DEPLOY_USER" not in result
+    assert "DEPLOY_PASS" not in result
+
+
+def test_filtered_env_content_keeps_lines_when_no_deploy_keys(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("GEMINI_API_KEYS=abc\n", encoding="utf-8")
+
+    result = _filtered_env_content(env_file)
+
+    assert result == "GEMINI_API_KEYS=abc\n"
 
 
 def test_escape_html_attr_escapes_double_quotes():

@@ -16,11 +16,6 @@ def render():
         f"누적 수집 {cached_db.count_mentions():,}건 · 키워드·기간·부동산사로 바로 필터링",
     )
 
-    st.markdown('<div class="sc-box">', unsafe_allow_html=True)
-    query = st.text_input(
-        "검색어", placeholder="검색어 입력 — 여러 단어는 띄어쓰기 (모두 포함된 기사만 표시)",
-        label_visibility="collapsed",
-    )
     c1, c2, c3 = st.columns([2, 1.3, 1])
     with c1:
         period = st.segmented_control("기간", list(_PERIOD_DAYS.keys()), default="전체")
@@ -28,7 +23,10 @@ def render():
         firm = st.selectbox("\U0001F3E2 부동산사", ["전체"] + news_feed.all_brand_names())
     with c3:
         sort = st.selectbox("↕️ 정렬", ["최신순", "점수순"])
-    st.markdown('</div>', unsafe_allow_html=True)
+    query = st.text_input(
+        "검색어", placeholder="검색어 입력 — 여러 단어는 띄어쓰기 (모두 포함된 기사만 표시)",
+        label_visibility="collapsed",
+    )
 
     if query and st.session_state.get("_last_logged_search") != query:
         db.log_activity(st.session_state.get("_client_ip", ""), "뉴스 검색", "검색", query)
