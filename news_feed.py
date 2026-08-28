@@ -182,6 +182,7 @@ def build_news_items(mentions: list[dict], own_brands: set, now: datetime | None
             "mention_id": m.get("id"),
             "content": content,
             "summary": summary,
+            "content_hash": m.get("content_hash", ""),
             "has_real_content": has_real_content,
             "decision": [f"{cat_line} {recency_line}"],
             "meta": f"🕒 {m.get('posted_at') or (m.get('collected_at', '') or '')[:16]} · {m.get('channel', '')}",

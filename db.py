@@ -70,7 +70,8 @@ CREATE TABLE IF NOT EXISTS mentions (
     collected_at  TEXT NOT NULL,
     search_term   TEXT NOT NULL DEFAULT '',
     content       TEXT NOT NULL DEFAULT '',
-    summary       TEXT NOT NULL DEFAULT ''
+    summary       TEXT NOT NULL DEFAULT '',
+    content_hash  TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -280,6 +281,11 @@ def _init_db_impl() -> None:
         con.execute(_mention_vectors_sql())
         con.execute(_policy_vectors_sql())
         _ensure_column(con, "mentions", "summary", "TEXT NOT NULL DEFAULT ''")
+        # summarizer.ensure_pdf_summaries()가 "summary가 이미 있으면 재호출 안 함" 방식이라,
+        # content가 나중에(예: 스크래퍼 개선/소급 정리) 바뀌어도 옛 content로 만든 요약이
+        # 영구히 안 고쳐지는 문제가 있었다(2026-08-28) — 요약을 만들 때 그 content의 해시를
+        # 같이 저장해두고, 다음에 content가 달라졌으면 재생성하도록 한다.
+        _ensure_column(con, "mentions", "content_hash", "TEXT NOT NULL DEFAULT ''")
         # embedding은 선언은 TEXT지만 실제로는 압축 바이너리(bytes, vectorizer._pack_embedding
         # 참고)를 저장한다 — SQLite는 동적 타이핑이라 BLOB 값을 TEXT 컬럼에 그대로 저장할 수
         # 있어(타입 강제 변환 없음) 컬럼 선언을 바꾸는 마이그레이션 없이도 문제없다. 값이
@@ -332,13 +338,15 @@ def insert_mention(record: dict) -> bool:
         return cur.rowcount > 0
 
 
-def update_mention_summary(mention_id: int, summary: str) -> None:
-    """기존 mention 1건의 summary만 갱신한다 (수집 시점에 놓친 건을 뒤늦게 요약해 채울 때 사용)."""
+def update_mention_summary(mention_id: int, summary: str, content_hash: str = "") -> None:
+    """기존 mention 1건의 summary만 갱신한다 (수집 시점에 놓친 건을 뒤늦게 요약해 채울 때 사용).
+    content_hash를 같이 저장해두면, 나중에 content가 바뀐 걸 감지해 요약을 재생성할 수 있다
+    (summarizer.ensure_pdf_summaries 참고)."""
     init_db()
     with _connect() as con:
         con.execute(
-            "UPDATE mentions SET summary = :summary WHERE id = :id",
-            {"summary": summary, "id": mention_id},
+            "UPDATE mentions SET summary = :summary, content_hash = :content_hash WHERE id = :id",
+            {"summary": summary, "content_hash": content_hash, "id": mention_id},
         )
 
 

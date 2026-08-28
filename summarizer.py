@@ -6,6 +6,7 @@ GEMINI_API_KEYS 여러 키 순차 시도, GEMINI_MODEL로 모델 지정)을 그�
 요약하면 근거가 부족해 지어낸 내용이 섞일 위험이 있어서다.
 """
 
+import hashlib
 import os
 import random
 from pathlib import Path
@@ -28,6 +29,10 @@ def _load_api_keys() -> list[str]:
 
 def _model_name() -> str:
     return os.getenv("GEMINI_MODEL", _DEFAULT_MODEL)
+
+
+def _content_hash(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 def _build_prompt(title: str, content: str) -> str:
@@ -75,20 +80,30 @@ def summarize_article(title: str, content: str) -> str:
 
 def ensure_pdf_summaries(items: list[dict]) -> bool:
     """PDF에 실제로 노출되는 상위 항목(top5)에 대해서만 AI 요약을 만들어 DB에 저장한다.
-    이미 summary가 있는 항목은 다시 호출하지 않는다. views/report.py의 렌더링 경로와,
-    scheduler.py의 백그라운드 사전 생성 경로 양쪽에서 같은 로직을 쓴다 — 백그라운드에서
-    미리 돌려두면 사용자가 PDF 보고서 페이지를 열 때 Gemini 호출을 기다리지 않는다."""
+    이미 summary가 있고 그 summary를 만든 content와 지금 content가 같으면(content_hash
+    일치) 다시 호출하지 않는다 — content_hash가 비어있으면(이 기능 도입 이전에 만들어진
+    옛 summary) 굳이 재생성하지 않고 그대로 둔다(2026-08-28 이전 데이터를 한꺼번에
+    재호출하는 비용을 피하기 위함). content가 나중에 바뀌었는데(예: 스크래퍼 개선) 옛
+    content_hash가 남아있으면 재생성한다. views/report.py의 렌더링 경로와, scheduler.py의
+    백그라운드 사전 생성 경로 양쪽에서 같은 로직을 쓴다 — 백그라운드에서 미리 돌려두면
+    사용자가 PDF 보고서 페이지를 열 때 Gemini 호출을 기다리지 않는다."""
     import db
 
     updated = False
     for item in items:
-        if item.get("content") and not item.get("summary") and item.get("mention_id"):
-            ai_summary = summarize_article(item["title"], item["content"])
-            if ai_summary:
-                db.update_mention_summary(item["mention_id"], ai_summary)
-                item["summary"] = ai_summary
-                item["desc_long"] = [ai_summary]
-                updated = True
+        if not (item.get("content") and item.get("mention_id")):
+            continue
+        current_hash = _content_hash(item["content"])
+        stale = item.get("content_hash") and item["content_hash"] != current_hash
+        if item.get("summary") and not stale:
+            continue
+        ai_summary = summarize_article(item["title"], item["content"])
+        if ai_summary:
+            db.update_mention_summary(item["mention_id"], ai_summary, content_hash=current_hash)
+            item["summary"] = ai_summary
+            item["content_hash"] = current_hash
+            item["desc_long"] = [ai_summary]
+            updated = True
     return updated
 
 

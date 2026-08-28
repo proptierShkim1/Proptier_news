@@ -181,6 +181,25 @@ def test_update_mention_summary_persists_summary_for_given_id(tmp_path, monkeypa
     assert db.get_mentions()[0]["summary"] == "AI가 생성한 요약"
 
 
+def test_update_mention_summary_persists_content_hash(tmp_path, monkeypatch):
+    """content_hash를 같이 저장해둬야 summarizer가 나중에 content 변경을 감지해 요약을
+    재생성할 수 있다(2026-08-28)."""
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1"))
+    mention_id = db.get_mentions()[0]["id"]
+
+    db.update_mention_summary(mention_id, "AI가 생성한 요약", content_hash="abc123")
+
+    assert db.get_mentions()[0]["content_hash"] == "abc123"
+
+
+def test_mentions_default_content_hash_to_empty_string(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention(_mention(url="https://x/1"))
+
+    assert db.get_mentions()[0]["content_hash"] == ""
+
+
 def test_ensure_column_adds_missing_column_to_existing_table(tmp_path, monkeypatch):
     """summary 컬럼이 없는 기존 DB 파일도 init_db() 호출만으로 안전하게 마이그레이션되는지 확인."""
     import sqlite3

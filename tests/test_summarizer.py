@@ -63,9 +63,9 @@ def test_summarize_article_returns_empty_string_when_all_keys_fail(monkeypatch):
     assert mock_usage.call_args.kwargs["ok"] is False
 
 
-def _item(title="제목", content="", summary="", mention_id=1):
+def _item(title="제목", content="", summary="", mention_id=1, content_hash=""):
     return {"title": title, "content": content, "summary": summary, "mention_id": mention_id,
-            "desc_long": ["긴 발췌"]}
+            "content_hash": content_hash, "desc_long": ["긴 발췌"]}
 
 
 def test_ensure_pdf_summaries_calls_gemini_only_for_items_with_content_and_no_summary():
@@ -76,7 +76,7 @@ def test_ensure_pdf_summaries_calls_gemini_only_for_items_with_content_and_no_su
         updated = summarizer.ensure_pdf_summaries(items)
 
     mock_summarize.assert_called_once_with("제목", "원문 있음")
-    mock_update.assert_called_once_with(1, "새 AI 요약")
+    mock_update.assert_called_once_with(1, "새 AI 요약", content_hash=summarizer._content_hash("원문 있음"))
     assert updated is True
     assert items[0]["summary"] == "새 AI 요약"
     assert items[0]["desc_long"] == ["새 AI 요약"]
@@ -91,6 +91,36 @@ def test_ensure_pdf_summaries_skips_items_that_already_have_a_summary():
     mock_summarize.assert_not_called()
     assert updated is False
     assert items[0]["desc_long"] == ["긴 발췌"]
+
+
+def test_ensure_pdf_summaries_regenerates_when_content_hash_is_stale():
+    """content가 나중에 바뀌었는데(예: 스크래퍼 개선/소급 정리) 요약을 만들 때 저장해둔
+    content_hash가 지금 content와 다르면 재생성해야 한다(2026-08-28)."""
+    items = [_item(content="새로 정리된 원문", summary="옛 content로 만든 요약", content_hash="옛-해시")]
+
+    with patch.object(summarizer, "summarize_article", return_value="재생성된 요약") as mock_summarize, \
+         patch("db.update_mention_summary") as mock_update:
+        updated = summarizer.ensure_pdf_summaries(items)
+
+    mock_summarize.assert_called_once_with("제목", "새로 정리된 원문")
+    mock_update.assert_called_once_with(
+        1, "재생성된 요약", content_hash=summarizer._content_hash("새로 정리된 원문"),
+    )
+    assert updated is True
+    assert items[0]["summary"] == "재생성된 요약"
+
+
+def test_ensure_pdf_summaries_leaves_old_summary_alone_when_content_hash_is_blank():
+    """content_hash가 비어있으면(이 기능 도입 이전에 만들어진 옛 summary) 무조건
+    재생성하지 않는다 — 과거 데이터를 한꺼번에 재호출하는 비용을 피하기 위함."""
+    items = [_item(content="원문", summary="옛 요약", content_hash="")]
+
+    with patch.object(summarizer, "summarize_article") as mock_summarize:
+        updated = summarizer.ensure_pdf_summaries(items)
+
+    mock_summarize.assert_not_called()
+    assert updated is False
+    assert items[0]["summary"] == "옛 요약"
 
 
 def test_ensure_pdf_summaries_skips_items_without_content():
@@ -135,7 +165,7 @@ def test_presummarize_top_pdf_items_counts_only_newly_summarized_items():
         updated_count = summarizer.presummarize_top_pdf_items(limit=5)
 
     mock_summarize.assert_called_once_with("첫번째", "원문1")
-    mock_update.assert_called_once_with(1, "새 요약")
+    mock_update.assert_called_once_with(1, "새 요약", content_hash=summarizer._content_hash("원문1"))
     assert updated_count == 1
 
 
