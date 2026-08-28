@@ -162,6 +162,22 @@ def test_build_adaptive_card_escapes_leading_markdown_heading_in_title():
     assert title_block["text"].startswith("[\\#")
 
 
+def test_build_adaptive_card_escapes_leading_markdown_heading_in_meta_line():
+    """meta 줄(brand · channel · posted_at)도 title/desc와 같은 이유로 이스케이프해야
+    한다 — 각 값 중 어느 것이든 원문 스크랩 텍스트일 수 있다."""
+    content = _content(total_count=1, own_brand_news=[{
+        "title": "자사뉴스", "url": "https://x/1", "brand": "# 이상한 브랜드명",
+        "channel": "네이버", "posted_at": "2026.08.27", "signal": "🚀", "desc": "",
+    }])
+    payload = notify.build_adaptive_card(content, "2026-08-27")
+    body = payload["attachments"][0]["content"]["body"]
+
+    item_card = next(b for b in body if b.get("type") == "Container" and b.get("style") == "emphasis")
+    content_items = item_card["items"][0]["columns"][1]["items"]
+    meta_block = content_items[-1]
+    assert meta_block["text"].startswith("\\#")
+
+
 def test_build_adaptive_card_leaves_normal_desc_text_unescaped():
     content = _content(total_count=1, own_brand_news=[{
         "title": "자사뉴스", "url": "https://x/1", "brand": "프롭티어",

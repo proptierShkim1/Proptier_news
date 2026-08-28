@@ -147,7 +147,7 @@ def _card_html(rank, item, total_pages):
             <div class="badge" style="background:{color}">{rank}</div>
             <div class="badge-label"><b>오늘의 주요 뉴스</b><span>부동산 AI 뉴스 TOP {total_pages - 1}</span></div>
           </div>
-          <div class="datepill">{item['meta'].split('·')[0].replace(chr(0x1F552), '').strip()}</div>
+          <div class="datepill">{escape_html(item['meta'].split('·')[0].replace(chr(0x1F552), '').strip())}</div>
         </div>
         <h2>{escape_html(item['title'])}</h2>
         <div class="rule"></div>

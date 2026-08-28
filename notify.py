@@ -114,7 +114,7 @@ def _news_item_card(it: dict, rank: str) -> dict:
                          "isSubtle": True, "spacing": "Small", "wrap": True})
     meta = " · ".join(v for v in (it.get("brand"), it.get("channel"), it.get("posted_at")) if v)
     if meta:
-        content.append({"type": "TextBlock", "text": meta, "size": "Small",
+        content.append({"type": "TextBlock", "text": _md_safe(meta), "size": "Small",
                          "isSubtle": True, "spacing": "Small", "wrap": True})
     return {
         "type": "Container", "style": "emphasis", "spacing": "Small",

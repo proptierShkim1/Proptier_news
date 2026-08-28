@@ -73,6 +73,17 @@ def test_get_mentions_since_excludes_older_than_window(tmp_path, monkeypatch):
     assert [r["url"] for r in results] == ["https://x/1"]
 
 
+def test_get_mentions_since_default_limit_does_not_silently_truncate_recent_history():
+    """LIMIT 5000이 기본값이면 최근 이력이 그보다 많을 때(예: "최근 30일" 집계) 조용히
+    잘려서 graph_queries.py의 카테고리 집계가 실제로는 최근 7일치만 반영하는 사고가
+    있었다(2026-08-28). 기본 limit을 충분히 크게 유지해야 한다."""
+    import inspect
+
+    default_limit = inspect.signature(db.get_mentions_since).parameters["limit"].default
+
+    assert default_limit >= 50000
+
+
 def test_get_policy_events_since_excludes_older_than_window(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     recent = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
@@ -83,6 +94,14 @@ def test_get_policy_events_since_excludes_older_than_window(tmp_path, monkeypatc
     results = db.get_policy_events_since(days=30)
 
     assert [r["url"] for r in results] == ["https://p/1"]
+
+
+def test_get_policy_events_since_default_limit_does_not_silently_truncate_recent_history():
+    import inspect
+
+    default_limit = inspect.signature(db.get_policy_events_since).parameters["limit"].default
+
+    assert default_limit >= 50000
 
 
 def test_count_mentions_between_selects_correct_window(tmp_path, monkeypatch):
@@ -434,6 +453,20 @@ def test_mentions_default_to_empty_embedding(tmp_path, monkeypatch):
 
     assert db.count_mentions_without_embedding() == 1
     assert db.get_mentions_without_embedding()[0]["title"] == "제목"
+
+
+def test_mentions_with_blank_title_and_content_are_excluded_from_pending(tmp_path, monkeypatch):
+    """title/content/snippet이 전부 빈 mention은 embed_text()가 즉시 None을 반환해 영원히
+    임베딩에 실패한다 — vectorizer가 이런 건을 매 배치마다 "대기 중"으로 다시 집어 조용히
+    반복 재시도하던 문제(2026-08-28)를 막는다. count와 목록 둘 다 이 건을 빼야 한다."""
+    _isolate(tmp_path, monkeypatch)
+    db.insert_mention({**_mention(url="https://x/1"), "title": "", "content": "", "snippet": ""})
+    db.insert_mention(_mention(url="https://x/2"))
+
+    assert db.count_mentions_without_embedding() == 1
+    pending = db.get_mentions_without_embedding()
+    assert len(pending) == 1
+    assert pending[0]["snippet"] == "스니펫"
 
 
 def test_update_mention_embedding_removes_it_from_pending(tmp_path, monkeypatch):

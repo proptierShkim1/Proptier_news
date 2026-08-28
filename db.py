@@ -392,9 +392,13 @@ def get_top_mentioned_brands(days: int = 30, limit: int = 5) -> list[dict]:
         return [{"brand": r[0], "count": r[1]} for r in rows]
 
 
-def get_mentions_since(days: int, limit: int = 5000) -> list[dict]:
+def get_mentions_since(days: int, limit: int = 100000) -> list[dict]:
     """최근 days일간 수집된 mentions 전체(채널·노출설정 무관)를 반환한다 — 카테고리
-    집계처럼 화면 노출과 무관하게 전체 데이터를 봐야 하는 통계용 함수에 쓴다."""
+    집계처럼 화면 노출과 무관하게 전체 데이터를 봐야 하는 통계용 함수에 쓴다. limit은
+    "최신순 N건"이 아니라 안전장치용 상한이라, days 구간 내 실제 건수보다 낮으면 오래된
+    쪽부터 조용히 잘려나가 "N일 집계"라는 이름과 다른 결과를 돌려주게 된다(graph_queries.py
+    의 "최근 30일" 집계가 LIMIT 5000에 걸려 실제로는 최근 7일치만 반영했던 2026-08-28
+    사고) — days가 늘어나도 안전하게 넉넉한 값으로 잡는다."""
     init_db()
     with _connect() as con:
         con.row_factory = sqlite3.Row
@@ -406,8 +410,9 @@ def get_mentions_since(days: int, limit: int = 5000) -> list[dict]:
         return [dict(r) for r in rows]
 
 
-def get_policy_events_since(days: int, limit: int = 5000) -> list[dict]:
-    """최근 days일간 수집된 policy_events 전체를 반환한다."""
+def get_policy_events_since(days: int, limit: int = 100000) -> list[dict]:
+    """최근 days일간 수집된 policy_events 전체를 반환한다. get_mentions_since와 같은 이유로
+    limit을 넉넉하게 잡는다 — 안전장치일 뿐 "최신순 N건"이 아니다."""
     init_db()
     with _connect() as con:
         con.row_factory = sqlite3.Row
@@ -732,23 +737,27 @@ def clear_policy_event_embeddings(ids: list[int]) -> None:
 
 
 def get_mentions_without_embedding(limit: int = 200) -> list[dict]:
+    """title/content/snippet이 전부 빈 mention은 제외한다 — embed_text()가 빈 텍스트에
+    항상 None을 반환해 영원히 임베딩 못 하는 건이라, 포함시키면 vectorizer가 매 배치마다
+    같은 건을 다시 집어 조용히 skip만 반복한다(2026-08-28)."""
     init_db()
     with _connect() as con:
         con.row_factory = sqlite3.Row
         rows = con.execute(
-            "SELECT id, title, content, snippet FROM mentions WHERE embedding = '' "
-            "ORDER BY id DESC LIMIT :limit", {"limit": limit},
+            f"SELECT id, title, content, snippet FROM mentions WHERE embedding = '' "
+            f"AND {_MENTION_HAS_EMBEDDABLE_TEXT} ORDER BY id DESC LIMIT :limit", {"limit": limit},
         ).fetchall()
         return [dict(r) for r in rows]
 
 
 def get_policy_events_without_embedding(limit: int = 200) -> list[dict]:
+    """get_mentions_without_embedding과 같은 이유로 title/department가 전부 빈 건은 뺀다."""
     init_db()
     with _connect() as con:
         con.row_factory = sqlite3.Row
         rows = con.execute(
-            "SELECT id, title, department FROM policy_events WHERE embedding = '' "
-            "ORDER BY id DESC LIMIT :limit", {"limit": limit},
+            f"SELECT id, title, department FROM policy_events WHERE embedding = '' "
+            f"AND {_POLICY_EVENT_HAS_EMBEDDABLE_TEXT} ORDER BY id DESC LIMIT :limit", {"limit": limit},
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -806,16 +815,28 @@ def restore_policy_event_embeddings_by_url(rows: list[dict]) -> dict:
         return _restore_embeddings_by_url(con, "policy_events", rows)
 
 
+_MENTION_HAS_EMBEDDABLE_TEXT = "(title != '' OR content != '' OR snippet != '')"
+_POLICY_EVENT_HAS_EMBEDDABLE_TEXT = "(title != '' OR department != '')"
+
+
 def count_mentions_without_embedding() -> int:
+    """title/content/snippet이 전부 빈 mention은 vectorizer.embed_text()가 늘 None을
+    반환해 영원히 임베딩할 수 없다 — "대기 중" 집계에 넣으면 배치마다 조용히 재시도만
+    반복되는 건이 계속 잡히므로(2026-08-28) get_mentions_without_embedding과 같은
+    기준으로 뺀다."""
     init_db()
     with _connect() as con:
-        return con.execute("SELECT COUNT(*) FROM mentions WHERE embedding = ''").fetchone()[0]
+        return con.execute(
+            f"SELECT COUNT(*) FROM mentions WHERE embedding = '' AND {_MENTION_HAS_EMBEDDABLE_TEXT}"
+        ).fetchone()[0]
 
 
 def count_policy_events_without_embedding() -> int:
     init_db()
     with _connect() as con:
-        return con.execute("SELECT COUNT(*) FROM policy_events WHERE embedding = ''").fetchone()[0]
+        return con.execute(
+            f"SELECT COUNT(*) FROM policy_events WHERE embedding = '' AND {_POLICY_EVENT_HAS_EMBEDDABLE_TEXT}"
+        ).fetchone()[0]
 
 
 def insert_vector_run_log(entry: dict) -> None:

@@ -75,6 +75,18 @@ def test_card_escapes_malicious_url_and_gist_and_decision():
     assert "<script>alert(4)</script>" not in html
 
 
+def test_card_escapes_malicious_meta_in_datepill():
+    """datepill은 item['meta']( "🕒 {posted_at} · {channel}")에서 posted_at 부분을 뽑아
+    쓰는데, title/gist/decision과 달리 escape_html()을 안 거쳐 왔다 — posted_at은
+    크롤러가 사이트에서 그대로 긁어온 값이라 다른 필드와 같은 급의 위험이 있다."""
+    items = [_item("제목")]
+    items[0]["meta"] = "🕒 <script>alert(5)</script> · 네이버"
+
+    html = report_pdf.build_deck_html(items)
+
+    assert "<script>alert(5)</script>" not in html
+
+
 def test_card_shows_shortcut_link_to_article_url():
     items = [_item("제목")]
     items[0]["url"] = "https://example.com/article/123"

@@ -134,6 +134,26 @@ def test_ask_uses_no_context_note_when_context_is_empty(monkeypatch):
     assert "찾지 못했" in instruction
 
 
+def test_ask_no_context_note_does_not_force_general_knowledge_disclaimer_when_stats_tool_could_answer(monkeypatch):
+    """벡터 검색으로 그라운딩 컨텍스트를 못 찾은 경우(context="")에도, 실제로는 지표
+    도구(_STATS_TOOLS)가 정확한 사내 DB 데이터로 답할 수 있다 — 이때까지 무조건 "사내
+    데이터 기반 답변이 아니다"라고 밝히라고 지시하면 정확한 답변에 잘못된 딱지가 붙는다
+    (2026-08-26 발견, 2026-08-28 수정). 지표 도구로 답한 경우엔 그 딱지를 붙이지 말라는
+    조건부 지시가 있어야 한다."""
+    monkeypatch.setattr(agent_chat.summarizer, "_load_api_keys", lambda: ["key1"])
+    fake_chat = MagicMock()
+    fake_chat.send_message.return_value = MagicMock(text="응답")
+    fake_client = MagicMock()
+    fake_client.chats.create.return_value = fake_chat
+
+    with patch.object(agent_chat.genai, "Client", return_value=fake_client):
+        agent_chat.ask([], "오늘 채널별로 몇 건씩 모였어?")
+
+    instruction = fake_client.chats.create.call_args.kwargs["config"]["system_instruction"]
+    assert "지표 도구" in instruction
+    assert "일반 지식이라고 말하면 안 돼" in instruction
+
+
 def test_build_grounding_context_formats_mention_and_policy_hits():
     mention_hits = [
         {"title": "직방 신규 서비스 출시", "brand": "직방", "posted_at": "2026-08-01", "summary": "직방이 새 서비스를 냈다."},
