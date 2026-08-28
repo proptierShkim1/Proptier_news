@@ -54,6 +54,15 @@
 - **일회성 백필**: `collector.run_backfill(days=30, max_pages=10)` — 구글/다음/네이버뉴스API/매경API
   4채널 한정으로 과거 최대 30일치를 소급 수집하는 운영용 함수 (UI/스케줄에는 연결하지 않음, 필요할 때
   직접 호출)
+- **원문 스크래퍼 사이트 UI 문구 필터링(2026-08-28)**: `crawlers/article_content.py`(네이버뉴스API
+  originallink로 원문 본문을 긁어오는 범용 스크래퍼)가 본문 컨테이너 안의 사이트 UI
+  문구(글자크기 조절 버튼, 공유하기, 구독 버튼, "이미지 확대" 등)를 실제 기사 본문과 그대로
+  섞어 가져오던 문제 — seoul.co.kr/fnnews.com/kyeonggi.com 등 7개 사이트 108건+ 실측(이 오염된
+  desc가 그대로 Teams/PDF/오늘의 뉴스에 노출됨). `_BOILERPLATE_LINES`에 알려진 UI 문구를 담아
+  줄 전체가 정확히 일치할 때만 걸러낸다(부분일치가 아니라서 실제 문장 안에 우연히 같은 단어가
+  들어있어도 지우지 않음). 이미 저장돼 있던 content도 소급 정리(로컬 610건·프로덕션 2,023건,
+  네트워크 재수집 없이 순수 텍스트 변환). byline.network류(본문이 인터랙티브 태그로 쪼개져
+  문장이 끊기는 경우)는 이 방식으로 못 고치는 별개의 구조적 문제로 남아있다.
 
 설정 페이지의 "데이터 관리" 탭에서 브랜드/채널/제목/수집일로 필터링해 조회하고,
 개별 또는 전체 삭제할 수 있다. 같은 탭 상단의 "🔎 화면 표시 채널" 체크박스로 채널을 끄면
@@ -115,7 +124,8 @@
   문단 앞에 `#`을 붙여 쓰는 사이트(예: thescoop.co.kr)의 글이 오면 Teams의 Adaptive Card
   렌더러가 이를 마크다운 헤딩으로 해석해 글자가 비정상적으로 커지는 사고가 있었다.
   `notify._md_safe()`가 텍스트 맨 앞의 마크다운 블록 기호(`#`, `-`, `*`, `+`, `>`)만
-  이스케이프해 무력화한다.
+  이스케이프해 무력화한다. 뉴스 카드 meta 줄(brand·channel·posted_at)에도 같은 함수를
+  적용한다 — posted_at은 원문 스크랩 텍스트라 title/desc와 같은 클래스의 리스크가 있다.
 
 ## 접근 제어
 
@@ -168,7 +178,16 @@
   top5 중 `summary`가 비어있는 항목만 호출한다. 렌더링 시점에 처음 요약하면 Gemini 호출을
   기다려야 해서 첫 로딩이 느려지므로, `scheduler.py`가 5분 주기(+앱 시작 시 즉시)로 백그라운드에서
   미리 요약해 둔다(`summarizer.presummarize_top_pdf_items`) — 렌더링 경로는 대부분 이미 채워진
-  요약을 그대로 쓰고 실제 호출 없이 넘어간다
+  요약을 그대로 쓰고 실제 호출 없이 넘어간다. **캐시 무효화(2026-08-28)**: "summary가 있으면
+  다시 안 부른다"는 규칙 때문에, content가 나중에 바뀌어도(스크래퍼 개선·소급 정리 등) 옛 content로
+  만든 요약이 영구히 안 고쳐지는 문제가 있었다. `mentions.content_hash` 컬럼(요약 생성 시점
+  content의 SHA-256)을 추가해, `summary`가 있어도 저장된 `content_hash`가 지금 content와 다르면
+  재생성하도록 바꿨다. `content_hash`가 비어있는(이 기능 도입 이전) 옛 요약은 과거 데이터를
+  한꺼번에 재호출하는 비용을 피하려고 그대로 둔다.
+- **datepill 이스케이프 누락 수정(2026-08-28)**: 카드의 title/gist/decision은 전부
+  `escape_html()`을 거치는데 날짜 배지(`datepill`, `item['meta']`에서 뽑아 씀) 한 줄만
+  빠져있어서, `posted_at`에 `<`/`>` 같은 문자가 들어오면(스크랩 원본이라 이론상 가능) 그
+  부분만 PDF 마크업이 깨질 수 있었다 — 다른 필드와 동일하게 이스케이프하도록 수정.
 - **원문 없는 기사 제외**: `news_feed.build_news_items()`는 항목마다 `has_real_content`
   플래그를 매긴다(본문 또는 제목과 다른 스니펫이 있으면 True). 구글 채널은 검색 결과
   스니펫을 항상 제목과 동일하게 주고, 뉴스 링크(`news.google.com/rss/articles/...`)도
@@ -237,6 +256,12 @@ summarizer.py와 같은 `.env`의 `GEMINI_API_KEYS`/`GEMINI_MODEL`을 재사용�
   지표 질문임을 판별하면(`agent_chat.looks_like_stats_only_question`) 벡터 검색(임베딩 API 호출
   2회)을 아예 건너뛴다 — 동시 사용자가 늘어날수록 Gemini API 키 풀에 걸리는 부담을 줄이기 위함
   (애매하면 항상 그라운딩을 시도해 근거 누락을 우선 방지).
+- **그라운딩 문구 오표시 수정(2026-08-28)**: 벡터 검색 컨텍스트가 없을 때(위에서 통계 질문이라
+  건너뛴 경우 포함) `_NO_CONTEXT_NOTE`가 무조건 "사내 데이터 기반 답변이 아니다"라고 밝히라고
+  지시했는데, 실제로는 지표 도구가 정확한 사내 DB로 답한 경우에도 이 딱지가 붙었다(2026-08-26
+  발견, 스코프 밖이라 미루고 있던 것). 함수 호출 여부를 코드로 감지하는 대신, "지표 도구로
+  답할 수 있으면 그 결과를 근거로 답하고 그건 일반 지식이 아니다, 지표 도구로도 답할 수 없을
+  때만 일반 지식 기반임을 밝혀라"는 조건부 지시로 프롬프트를 바꿔 해결했다.
 
   <details>
   <summary>등록된 29개 도구 전체 목록 (펼치기)</summary>
@@ -303,6 +328,12 @@ summarizer.py와 같은 `.env`의 `GEMINI_API_KEYS`/`GEMINI_MODEL`을 재사용�
   정책(약 1주 이상 지난)에 대해 실제로는 데이터가 있어도 조용히 0건으로 답하는 문제가 발견되어,
   명시적 날짜 구간으로 조회하는 `db.get_mentions_between`(임베딩 컬럼 제외, LIMIT이 아니라 날짜
   범위로 경계를 정함)을 새로 만들어 교체했다.
+  **2026-08-28: 같은 LIMIT 5000 문제가 `category_alignment_counts`/`brand_role_category_breakdown`
+  (둘 다 `get_mentions_since`를 그대로 씀)에서 재발했다.** 수집량이 하루 700~900건대로 늘면서
+  기본값 `days=30`이 실제로는 최근 ~7일치로 조용히 잘려 "30일 집계"라는 이름과 다른 결과를
+  반환하고 있었다 — 이번엔 호출부를 바꾸는 대신 `get_mentions_since`/`get_policy_events_since`
+  자체의 기본 `limit`을 5000→100000으로 올려 근본 원인에서 고쳤다(둘 다 함수 독스트링이 원래
+  "전체 반환"을 약속하고 있었으므로).
 
 ## 성능 · 동시 접속
 
@@ -447,7 +478,10 @@ OOM-kill, 배포 스크립트가 자기 자신의 서버 프로세스를 죽인 
   시각을 `/`로 구분해 등록, 미등록 시 자동 실행 없음)으로 직접 관리한다.
   `scheduler.py`의 `_tick_auto_vectorize`가 등록된 시각에 `start_background_vectorize()`를
   호출하며, 이미 진행 중인 벡터화는 알아서 건너뛰므로 배치 하나가 오래 걸려도 겹쳐 실행되지
-  않는다.
+  않는다. **영구 재시도 방지(2026-08-28)**: title/content/snippet이 전부 빈 mention은
+  `embed_text()`가 항상 None을 반환해 영원히 임베딩할 수 없는데, 이런 건도 "대기 중"으로
+  집계돼 매 벡터화 배치마다 조용히 다시 집혀 skip만 반복되고 있었다 — `get_mentions_without_embedding`/
+  `count_mentions_without_embedding`이 이런 행을 애초에 제외하도록 수정.
 - **AI AGENT 벡터 검색 연동**: 질문이 들어오면 `vectorizer.search_similar_mentions`/
   `search_similar_policy_events`가 질문을 임베딩해 `mention_vectors`/`policy_vectors`에서
   코사인 거리가 가까운 문서를 상위 N개(뉴스 5·정책 3) 찾는다. 이 결과를
