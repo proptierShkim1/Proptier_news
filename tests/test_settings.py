@@ -63,6 +63,40 @@ def test_filtered_env_content_strips_deploy_keys(tmp_path):
     assert "DEPLOY_PASS" not in result
 
 
+def test_filtered_env_content_injects_site_url_from_deploy_host_and_port(tmp_path):
+    """배포된 서버가 Teams 웹훅 카드 '더보기' 버튼에 쓸 자기 자신의 주소를 알 수 있도록,
+    DEPLOY_HOST/DEPLOY_APP_PORT로 계산한 SITE_URL을 서버 .env에 대신 심어준다 —
+    DEPLOY_HOST 자체는 배포 시 제외되므로(위 테스트) 서버는 이 값이 아니면 자기 주소를
+    알 방법이 없다."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "GEMINI_API_KEYS=abc\nDEPLOY_HOST=192.168.10.169\nDEPLOY_APP_PORT=7000\n",
+        encoding="utf-8",
+    )
+
+    result = _filtered_env_content(env_file)
+
+    assert "SITE_URL=http://192.168.10.169:7000" in result
+
+
+def test_filtered_env_content_defaults_site_url_port_when_deploy_app_port_missing(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("DEPLOY_HOST=192.168.10.169\n", encoding="utf-8")
+
+    result = _filtered_env_content(env_file)
+
+    assert "SITE_URL=http://192.168.10.169:7000" in result
+
+
+def test_filtered_env_content_does_not_inject_site_url_when_no_deploy_host(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("GEMINI_API_KEYS=abc\n", encoding="utf-8")
+
+    result = _filtered_env_content(env_file)
+
+    assert "SITE_URL" not in result
+
+
 def test_filtered_env_content_keeps_lines_when_no_deploy_keys(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text("GEMINI_API_KEYS=abc\n", encoding="utf-8")

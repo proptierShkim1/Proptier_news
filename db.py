@@ -170,6 +170,18 @@ CREATE TABLE IF NOT EXISTS agent_chat_messages (
 );
 """
 
+_WEBHOOK_SEND_LOGS_SQL = """
+CREATE TABLE IF NOT EXISTS webhook_send_logs (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    ran_at   TEXT NOT NULL,
+    trigger  TEXT NOT NULL DEFAULT '수동',
+    targets  INTEGER NOT NULL DEFAULT 0,
+    sent     INTEGER NOT NULL DEFAULT 0,
+    ok       INTEGER NOT NULL DEFAULT 1,
+    message  TEXT NOT NULL DEFAULT ''
+);
+"""
+
 _BRIEFING_ARCHIVES_SQL = """
 CREATE TABLE IF NOT EXISTS briefing_archives (
     date              TEXT PRIMARY KEY,
@@ -260,6 +272,7 @@ def _init_db_impl() -> None:
         con.execute(_POLICY_EVENTS_SQL)
         con.execute(_POLICY_RUN_LOGS_SQL)
         con.execute(_VECTOR_RUN_LOGS_SQL)
+        con.execute(_WEBHOOK_SEND_LOGS_SQL)
         con.execute(_ACTIVITY_LOG_SQL)
         con.execute(_API_USAGE_LOG_SQL)
         con.execute(_BRIEFING_ARCHIVES_SQL)
@@ -276,6 +289,26 @@ def _init_db_impl() -> None:
         con.execute("CREATE INDEX IF NOT EXISTS idx_mentions_collected_at ON mentions(collected_at)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_agent_chat_messages_ip ON agent_chat_messages(ip)")
     migrate_agent_chat_history_json(DB_PATH.parent / "agent_chat_history.json")
+
+
+def insert_webhook_send_log(entry: dict) -> None:
+    init_db()
+    with _connect() as con:
+        con.execute(
+            "INSERT INTO webhook_send_logs (ran_at, trigger, targets, sent, ok, message) "
+            "VALUES (:ran_at, :trigger, :targets, :sent, :ok, :message)",
+            entry,
+        )
+
+
+def get_webhook_send_logs(limit: int = 50) -> list[dict]:
+    init_db()
+    with _connect() as con:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT * FROM webhook_send_logs ORDER BY ran_at DESC LIMIT :limit", {"limit": limit},
+        ).fetchall()
+        return _coerce_ints([dict(r) for r in rows], "targets", "sent", "ok")
 
 
 def insert_mention(record: dict) -> bool:

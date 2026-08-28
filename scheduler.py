@@ -12,6 +12,7 @@ from pathlib import Path
 import collector
 import db
 import news_feed
+import notify
 import summarizer
 import vectorizer
 from utils import (
@@ -20,6 +21,7 @@ from utils import (
     load_naver_news_collection_schedule,
     load_policy_collection_schedule,
     load_vector_collection_schedule,
+    load_webhook_schedule,
 )
 
 _POLL_SECONDS = 30
@@ -158,6 +160,25 @@ def _tick_mk_news() -> None:
         logger.exception("스케줄러(매경 API) 반복 실행 중 오류 발생")
 
 
+def _tick_webhook_send() -> None:
+    """웹훅 발송 자동 체크. 다른 채널과 독립된 스케줄/예외 처리."""
+    try:
+        now = datetime.now()
+        minute_key = now.strftime("%Y-%m-%d %H:%M")
+        with _lock:
+            already_fired = minute_key == _last_fired_state.get("webhook_send")
+        if not already_fired:
+            schedules = load_webhook_schedule()["times"]
+            if schedule_matches_now(schedules, now):
+                with _lock:
+                    _last_fired_state["webhook_send"] = minute_key
+                    _save_last_fired_state(_last_fired_state)
+                result = notify.send_daily_report(trigger="자동")
+                logger.info("웹훅 자동 발송 완료 (%s/%s)", result["sent"], result["targets"])
+    except Exception:
+        logger.exception("스케줄러(웹훅 발송) 반복 실행 중 오류 발생")
+
+
 def _tick_archive_briefings() -> None:
     """일별 브리핑 확정(아카이빙). 정확한 시각 일치가 아니라 "아직 확정 안 된 과거
     날짜가 있으면 즉시 확정"하는 방식이라 tick을 놓쳐도 다음 tick에서 만회된다."""
@@ -267,6 +288,7 @@ def _tick() -> None:
     _tick_policy()
     _tick_naver_news()
     _tick_mk_news()
+    _tick_webhook_send()
     _tick_archive_briefings()
     _tick_pdf_presummary()
     _tick_auto_vectorize()

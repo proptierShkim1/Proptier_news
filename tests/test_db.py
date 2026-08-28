@@ -562,6 +562,24 @@ def test_insert_vector_run_log_and_get_vector_run_logs_orders_most_recent_first(
     assert [l["source"] for l in logs] == ["policy_events", "mentions"]
 
 
+def test_insert_webhook_send_log_and_get_webhook_send_logs_orders_most_recent_first(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    db.insert_webhook_send_log({
+        "ran_at": "2026-08-27 09:00:00", "trigger": "자동", "targets": 2, "sent": 2,
+        "ok": 1, "message": "2/2개 웹훅 발송 성공 · 기사 10건",
+    })
+    db.insert_webhook_send_log({
+        "ran_at": "2026-08-27 18:00:00", "trigger": "수동", "targets": 2, "sent": 1,
+        "ok": 0, "message": "1/2개 웹훅 발송 성공 · 기사 12건",
+    })
+
+    logs = db.get_webhook_send_logs()
+
+    assert [l["trigger"] for l in logs] == ["수동", "자동"]
+    assert logs[0]["sent"] == 1
+    assert logs[0]["ok"] == 0
+
+
 def test_log_activity_and_get_activity_log_orders_most_recent_first(tmp_path, monkeypatch):
     _isolate(tmp_path, monkeypatch)
     db.log_activity("1.1.1.1", "오늘의 뉴스", "페이지 방문")

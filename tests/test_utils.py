@@ -9,6 +9,8 @@ from utils import (
     load_naver_news_collection_schedule,
     load_policy_collection_schedule,
     load_vector_collection_schedule,
+    load_webhook_schedule,
+    load_webhooks,
     resolve_relative_korean_date,
     save_channel_visibility,
     save_collection_schedule,
@@ -16,6 +18,7 @@ from utils import (
     save_naver_news_collection_schedule,
     save_policy_collection_schedule,
     save_vector_collection_schedule,
+    save_webhook_schedule,
 )
 import utils
 
@@ -212,3 +215,59 @@ def test_load_agent_settings_backfills_missing_key_from_old_file(tmp_path, monke
 
 # AI AGENT 채팅 기록은 db.py의 agent_chat_messages 테이블(메시지 1건 = 1행)로 옮겨졌다 —
 # 이 파일 기반 API 테스트들은 tests/test_db.py의 agent_chat 관련 테스트로 대체되었다.
+
+
+def test_load_webhooks_defaults_to_empty_list_when_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(utils, "WEBHOOKS_FILE", tmp_path / "webhooks.json")
+
+    assert load_webhooks() == []
+
+
+def test_add_webhook_appends_entry_with_id_and_enabled_true(tmp_path, monkeypatch):
+    monkeypatch.setattr(utils, "WEBHOOKS_FILE", tmp_path / "webhooks.json")
+
+    entry = utils.add_webhook("팀채널", "https://example.com/webhook")
+
+    assert entry["name"] == "팀채널"
+    assert entry["url"] == "https://example.com/webhook"
+    assert entry["enabled"] is True
+    assert entry["id"]
+    assert load_webhooks() == [entry]
+
+
+def test_delete_webhook_removes_only_matching_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(utils, "WEBHOOKS_FILE", tmp_path / "webhooks.json")
+    keep = utils.add_webhook("유지", "https://example.com/keep")
+    drop = utils.add_webhook("삭제", "https://example.com/drop")
+
+    utils.delete_webhook(drop["id"])
+
+    assert load_webhooks() == [keep]
+
+
+def test_set_webhook_enabled_toggles_only_matching_webhook(tmp_path, monkeypatch):
+    monkeypatch.setattr(utils, "WEBHOOKS_FILE", tmp_path / "webhooks.json")
+    a = utils.add_webhook("A", "https://example.com/a")
+    b = utils.add_webhook("B", "https://example.com/b")
+
+    utils.set_webhook_enabled(a["id"], False)
+
+    webhooks = {w["id"]: w for w in load_webhooks()}
+    assert webhooks[a["id"]]["enabled"] is False
+    assert webhooks[b["id"]]["enabled"] is True
+
+
+def test_load_webhook_schedule_defaults_when_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(utils, "WEBHOOK_SCHEDULE_FILE", tmp_path / "webhook_schedule.json")
+
+    assert load_webhook_schedule() == {"times": []}
+
+
+def test_save_webhook_schedule_persists_times(tmp_path, monkeypatch):
+    schedule_file = tmp_path / "webhook_schedule.json"
+    monkeypatch.setattr(utils, "WEBHOOK_SCHEDULE_FILE", schedule_file)
+
+    save_webhook_schedule({"times": ["09:00", "18:00"]})
+
+    assert json.loads(schedule_file.read_text(encoding="utf-8")) == {"times": ["09:00", "18:00"]}
+    assert load_webhook_schedule() == {"times": ["09:00", "18:00"]}

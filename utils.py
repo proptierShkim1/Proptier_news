@@ -4,6 +4,7 @@ hana_p — 데이터 수집 공용 유틸리티 (키워드/스케줄 설정, 상
 
 import json
 import re
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -16,6 +17,8 @@ MK_NEWS_COLLECTION_SCHEDULE_FILE = DATA_DIR / "mk_news_collection_schedule.json"
 VECTOR_COLLECTION_SCHEDULE_FILE = DATA_DIR / "vector_collection_schedule.json"
 CHANNEL_VISIBILITY_FILE = DATA_DIR / "channel_visibility.json"
 AGENT_SETTINGS_FILE = DATA_DIR / "agent_settings.json"
+WEBHOOKS_FILE = DATA_DIR / "webhooks.json"
+WEBHOOK_SCHEDULE_FILE = DATA_DIR / "webhook_schedule.json"
 ALL_MENTION_CHANNELS = ["네이버", "구글", "다음", "커뮤니티", "네이버뉴스API", "매경API"]
 
 
@@ -145,6 +148,44 @@ def load_agent_settings() -> dict:
 
 def save_agent_settings(cfg: dict) -> None:
     save_json(AGENT_SETTINGS_FILE, cfg)
+
+
+def load_webhooks() -> list[dict]:
+    return load_json(WEBHOOKS_FILE, [])
+
+
+def save_webhooks(webhooks: list[dict]) -> None:
+    save_json(WEBHOOKS_FILE, webhooks)
+
+
+def add_webhook(name: str, url: str) -> dict:
+    webhooks = load_webhooks()
+    entry = {"id": uuid.uuid4().hex, "name": name, "url": url, "enabled": True}
+    webhooks.append(entry)
+    save_webhooks(webhooks)
+    return entry
+
+
+def delete_webhook(webhook_id: str) -> None:
+    save_webhooks([w for w in load_webhooks() if w["id"] != webhook_id])
+
+
+def set_webhook_enabled(webhook_id: str, enabled: bool) -> None:
+    webhooks = load_webhooks()
+    for w in webhooks:
+        if w["id"] == webhook_id:
+            w["enabled"] = enabled
+    save_webhooks(webhooks)
+
+
+def load_webhook_schedule() -> dict:
+    cfg = load_json(WEBHOOK_SCHEDULE_FILE, {"times": []})
+    cfg["times"] = _normalize_schedule_times(cfg.get("times", []))
+    return cfg
+
+
+def save_webhook_schedule(cfg: dict) -> None:
+    save_json(WEBHOOK_SCHEDULE_FILE, cfg)
 
 
 _RELATIVE_KOREAN_DATE_RE = re.compile(r"^(\d+)(분|시간|일)\s*전$")

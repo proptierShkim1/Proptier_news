@@ -59,6 +59,7 @@ def _reset(monkeypatch):
     monkeypatch.setattr(scheduler, "_tick_archive_briefings", lambda: None)
     monkeypatch.setattr(scheduler, "_tick_db_backup", lambda: None)
     monkeypatch.setattr(scheduler, "_tick_db_health_check", lambda: None)
+    monkeypatch.setattr(scheduler, "_tick_webhook_send", lambda: None)
 
 
 def test_tick_new_posts_and_policy_fire_on_their_own_independent_schedules(monkeypatch):
@@ -576,6 +577,63 @@ def test_tick_archive_briefings_swallows_exception(monkeypatch, caplog):
     assert any("오류" in record.message for record in caplog.records)
 
 
+def test_tick_webhook_send_fires_on_its_own_independent_schedule(monkeypatch):
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 18, 0))
+    monkeypatch.setattr(scheduler, "load_webhook_schedule", lambda: {"times": ["18:00"]})
+    calls = []
+    monkeypatch.setattr(
+        scheduler.notify, "send_daily_report",
+        lambda trigger: calls.append(trigger) or {"targets": 1, "sent": 1},
+    )
+
+    scheduler._tick_webhook_send()
+
+    assert calls == ["자동"]
+    assert scheduler._last_fired_state["webhook_send"] == "2026-07-16 18:00"
+
+
+def test_tick_webhook_send_does_not_fire_when_time_not_in_schedule(monkeypatch):
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 18, 1))
+    monkeypatch.setattr(scheduler, "load_webhook_schedule", lambda: {"times": ["18:00"]})
+    calls = []
+    monkeypatch.setattr(scheduler.notify, "send_daily_report", lambda trigger: calls.append(trigger))
+
+    scheduler._tick_webhook_send()
+
+    assert calls == []
+
+
+def test_tick_webhook_send_does_not_fire_twice_for_same_minute(monkeypatch):
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 18, 0))
+    monkeypatch.setattr(scheduler, "load_webhook_schedule", lambda: {"times": ["18:00"]})
+    calls = []
+    monkeypatch.setattr(
+        scheduler.notify, "send_daily_report",
+        lambda trigger: calls.append(trigger) or {"targets": 1, "sent": 1},
+    )
+
+    scheduler._tick_webhook_send()
+    scheduler._tick_webhook_send()
+
+    assert len(calls) == 1
+
+
+def test_tick_webhook_send_swallows_exception(monkeypatch, caplog):
+    _fix_now(monkeypatch, datetime(2026, 7, 16, 18, 0))
+    monkeypatch.setattr(scheduler, "load_webhook_schedule", lambda: {"times": ["18:00"]})
+
+    def boom(trigger):
+        raise RuntimeError("teams down")
+
+    monkeypatch.setattr(scheduler.notify, "send_daily_report", boom)
+
+    with caplog.at_level("ERROR", logger="hana_p.scheduler"):
+        scheduler._tick_webhook_send()
+
+    assert scheduler._last_fired_state["webhook_send"] == "2026-07-16 18:00"
+    assert any("오류" in record.message for record in caplog.records)
+
+
 def test_tick_includes_archive_briefings_when_not_disabled(monkeypatch):
     """_reset()의 비활성화 없이 _tick()을 직접 호출하면 브리핑 아카이빙 tick도 함께 도는지
     확인 — _tick()에 실제로 연결됐는지 검증하는 목적."""
@@ -587,6 +645,7 @@ def test_tick_includes_archive_briefings_when_not_disabled(monkeypatch):
     monkeypatch.setattr(scheduler, "_tick_auto_vectorize", lambda: None)
     monkeypatch.setattr(scheduler, "_tick_db_backup", lambda: None)
     monkeypatch.setattr(scheduler, "_tick_db_health_check", lambda: None)
+    monkeypatch.setattr(scheduler, "_tick_webhook_send", lambda: None)
     calls = []
     monkeypatch.setattr(scheduler.news_feed, "archive_pending_briefings", lambda: calls.append(1) or [])
 

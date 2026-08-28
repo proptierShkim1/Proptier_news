@@ -13,11 +13,14 @@ import cached_db
 import collector
 import db
 import gemini_pricing
+import notify
 import theme
 import vectorizer
 from access_control import load_config, save_config, name_for_ip
 from utils import (
     ALL_MENTION_CHANNELS,
+    add_webhook,
+    delete_webhook,
     load_agent_settings,
     load_channel_visibility,
     load_collection_schedule,
@@ -26,6 +29,8 @@ from utils import (
     load_naver_news_collection_schedule,
     load_policy_collection_schedule,
     load_vector_collection_schedule,
+    load_webhook_schedule,
+    load_webhooks,
     save_agent_settings,
     save_channel_visibility,
     save_collection_schedule,
@@ -34,6 +39,8 @@ from utils import (
     save_naver_news_collection_schedule,
     save_policy_collection_schedule,
     save_vector_collection_schedule,
+    save_webhook_schedule,
+    set_webhook_enabled,
 )
 
 ROOT = Path(__file__).parent.parent
@@ -61,6 +68,7 @@ _DATA_UPLOAD_SKIP = {
     "collection_schedule.json",
     "policy_collection_schedule.json", "naver_news_collection_schedule.json",
     "mk_news_collection_schedule.json", "vector_collection_schedule.json",
+    "webhooks.json", "webhook_schedule.json",
     "channel_visibility.json", "agent_chat_history.json", "agent_settings.json", "deploy_log.jsonl",
     "scheduler.log", "scheduler_last_fired.json", "vector_backups", "db_backups",
 }
@@ -160,6 +168,19 @@ _ENV_UPLOAD_EXCLUDE_PREFIX = "DEPLOY_"
 def _filtered_env_content(local_path: Path) -> str:
     lines = local_path.read_text(encoding="utf-8").splitlines()
     kept = [ln for ln in lines if not ln.strip().startswith(_ENV_UPLOAD_EXCLUDE_PREFIX)]
+
+    # DEPLOY_HOST 자체는 위에서 제외되므로, 배포된 서버는 자기 자신의 접속 주소를 알 방법이
+    # 없다 — Teams 웹훅 카드의 "더보기" 버튼(notify.py)이 쓸 수 있도록, 로컬이 이미 알고
+    # 있는 배포 대상 주소를 SITE_URL로 계산해 대신 심어준다.
+    values = dict(
+        ln.split("=", 1) for ln in lines
+        if "=" in ln and not ln.strip().startswith("#")
+    )
+    deploy_host = values.get("DEPLOY_HOST", "").strip()
+    if deploy_host and not any(ln.strip().startswith("SITE_URL=") for ln in kept):
+        deploy_port = values.get("DEPLOY_APP_PORT", "").strip() or "7000"
+        kept.append(f"SITE_URL=http://{deploy_host}:{deploy_port}")
+
     return "\n".join(kept) + "\n"
 
 
@@ -1543,15 +1564,110 @@ def _render_agent_settings_tab():
         st.rerun()
 
 
+# ── 웹훅 ──────────────────────────────────────────────────────────────────
+
+def _render_webhook_tab():
+    st.subheader("🔔 Teams 웹훅")
+    st.caption(
+        "오늘의 브리핑(자사/경쟁사/시장 상위뉴스)을 Microsoft Teams Webhook으로 자동/수동 발송합니다."
+    )
+
+    webhooks = load_webhooks()
+    if not webhooks:
+        st.info("등록된 웹훅이 없습니다. 아래에서 추가하세요.")
+    for wh in webhooks:
+        col_name, col_url, col_toggle, col_test, col_del = st.columns([1.5, 3, 1, 1, 1])
+        col_name.write(wh["name"])
+        col_url.code(wh["url"], language=None)
+        new_enabled = col_toggle.checkbox("켜짐", value=wh["enabled"], key=f"webhook_enabled_{wh['id']}")
+        if new_enabled != wh["enabled"]:
+            set_webhook_enabled(wh["id"], new_enabled)
+            db.log_activity(
+                st.session_state.get("_client_ip", ""), "설정 · 웹훅", "웹훅 켜기/끄기",
+                f"{wh['name']} → {'켜짐' if new_enabled else '꺼짐'}",
+            )
+            st.rerun()
+        if col_test.button("테스트", key=f"webhook_test_{wh['id']}"):
+            ok, message = notify.send_test_webhook(wh["url"])
+            db.log_activity(
+                st.session_state.get("_client_ip", ""), "설정 · 웹훅", "웹훅 테스트 발송",
+                f"{wh['name']}: {'성공' if ok else '실패'} ({message})",
+            )
+            if ok:
+                st.success(f"{wh['name']}: {message}")
+            else:
+                st.error(f"{wh['name']}: {message}")
+        if col_del.button("삭제", key=f"webhook_del_{wh['id']}"):
+            delete_webhook(wh["id"])
+            db.log_activity(st.session_state.get("_client_ip", ""), "설정 · 웹훅", "웹훅 삭제", wh["name"])
+            st.rerun()
+
+    st.divider()
+    with st.form("add_webhook_form", clear_on_submit=True):
+        col_name, col_url = st.columns([1, 3])
+        name = col_name.text_input("이름", placeholder="예: 팀채널")
+        url = col_url.text_input("Teams Webhook URL")
+        if st.form_submit_button("➕ 웹훅 추가"):
+            if not name.strip() or not url.strip():
+                st.warning("이름과 URL을 모두 입력하세요.")
+            else:
+                add_webhook(name.strip(), url.strip())
+                db.log_activity(st.session_state.get("_client_ip", ""), "설정 · 웹훅", "웹훅 추가", name.strip())
+                st.rerun()
+
+    st.divider()
+    st.subheader("⏰ 발송 스케줄")
+    sched = load_webhook_schedule()
+    times_text = st.text_input(
+        "발송 시각 (/로 구분)", value="/".join(sched["times"]),
+        placeholder="예: 09:00/18:00", key="webhook_sched_times_text",
+    )
+    if st.button("💾 저장", key="webhook_sched_save"):
+        tokens = [t.strip() for t in times_text.split("/") if t.strip()]
+        invalid = [t for t in tokens if not _TIME_RE.match(t)]
+        if invalid:
+            st.error(f"HH:MM 형식이 아닌 시각이 있습니다: {', '.join(invalid)}")
+        else:
+            seen = []
+            for t in tokens:
+                if t not in seen:
+                    seen.append(t)
+            save_webhook_schedule({"times": seen})
+            st.rerun()
+    if sched["times"]:
+        st.caption(f"등록된 시각: {', '.join(sched['times'])}")
+    else:
+        st.caption("등록된 발송 시각이 없습니다 — 아래 '지금 발송' 버튼으로 수동 발송만 가능합니다.")
+
+    st.divider()
+    if st.button("📤 지금 발송", type="primary", key="webhook_send_now", disabled=not webhooks):
+        result = notify.send_daily_report(trigger="수동")
+        db.log_activity(
+            st.session_state.get("_client_ip", ""), "설정 · 웹훅", "웹훅 수동 발송",
+            f"{result['sent']}/{result['targets']}건 성공",
+        )
+        st.success(f"발송 완료: {result['sent']}/{result['targets']}개 웹훅 성공")
+        st.rerun()
+
+    st.divider()
+    st.subheader("📜 발송 실행 로그")
+    logs = db.get_webhook_send_logs(limit=50)
+    if logs:
+        log_df = pd.DataFrame(logs)[["ran_at", "trigger", "targets", "sent", "ok", "message"]]
+        st.dataframe(log_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("아직 발송 이력이 없습니다.")
+
+
 # ── 메인 진입점 ────────────────────────────────────────────────────────────
 
 def render():
     st.title("⚙️ 설정")
     labels = ["🔐 접근 제어", "🔄 데이터 수집", "🗃 데이터 관리", "🧬 벡터 데이터", "🤖 AI AGENT",
-              "💳 API 사용량", "📋 로그"]
+              "🔔 웹훅", "💳 API 사용량", "📋 로그"]
     render_fns = [_render_access_control, _render_data_collection, _render_data_management,
-                  _render_vector_data_tab, _render_agent_settings_tab, _render_api_usage_tab,
-                  _render_activity_log_tab]
+                  _render_vector_data_tab, _render_agent_settings_tab, _render_webhook_tab,
+                  _render_api_usage_tab, _render_activity_log_tab]
     # DEPLOY_HOST가 없으면(=원격 배포 대상으로 쓰이는 이 서버 자신에게는 배포 설정을
     # 안 올리므로, _filtered_env_content 참고) 탭 자체를 안 보이게 한다 — 로컬 개발
     # 환경에서만 이 탭이 보인다.
