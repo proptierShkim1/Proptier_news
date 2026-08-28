@@ -174,7 +174,7 @@ def test_build_issues_representative_title_is_earliest_mention():
 
 def test_build_issues_live_true_if_any_article_recent():
     # 두 기사 간 간격(34시간)은 CLUSTER_WINDOW_HOURS(48) 이내라 같은 이슈로 묶이고,
-    # now 기준으로는 최신 기사만 RECENCY_HOURS(12) 이내라 이슈 전체가 live로 표시돼야 함
+    # now 기준으로는 최신 기사만 RECENCY_HOURS(24) 이내라 이슈 전체가 live로 표시돼야 함
     now = datetime(2026, 8, 5, 20, 0, 0)
     mentions = [
         _mention("직방, AI 매물 추천 서비스 정식 출시", collected_at="2026-08-04 09:00:00"),

@@ -234,7 +234,7 @@ _lock = threading.Lock()
 def get_or_generate_pdf_bytes(items, total_count=0, ai_count=0) -> bytes:
     """캐시 키는 손으로 고른 필드 목록이 아니라 실제로 렌더링될 HTML
     (build_deck_html(items, total_count, ai_count))의 SHA-256 해시다. 이렇게 하면
-    표지의 날짜 줄(datetime.now() 기준)이나 카드별 최근성 문구("최근 12시간 내
+    표지의 날짜 줄(datetime.now() 기준)이나 카드별 최근성 문구("최근 24시간 내
     수집되어 신선도가 높습니다" vs "누적 수집 데이터 중 상위 신호로 선정되었습니다",
     news_feed.build_news_items가 매긴다) 같은, 렌더러가 실제로 읽는 모든 필드를
     자동으로 포함한다 — 나중에 렌더러가 새 필드를 읽게 되어도 캐시 키가 따라가지
