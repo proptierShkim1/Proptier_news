@@ -1,5 +1,6 @@
 import time
 
+import cached_db
 import collector
 import db
 
@@ -26,6 +27,13 @@ def _wait_until(condition, timeout=2.0, interval=0.02):
             return True
         time.sleep(interval)
     return condition()
+
+
+def _count_calls(monkeypatch, obj, attr):
+    """obj.attr 호출 횟수를 세는 스텁으로 바꿔치기하고 카운터 리스트를 반환한다."""
+    calls = []
+    monkeypatch.setattr(obj, attr, lambda: calls.append(1))
+    return calls
 
 
 def test_collect_molit_press_releases_saves_records_and_returns_summary(tmp_path, monkeypatch):
@@ -547,3 +555,56 @@ def test_start_background_mk_news_collection_returns_none_when_already_running(t
     assert second_run_id is None
     blocker.append(1)
     assert _wait_until(lambda: collector.active_mk_news_run_id() is None)
+
+
+def test_start_background_collection_clears_cached_db_when_done(tmp_path, monkeypatch):
+    """배치 자동 수집이 끝나면 cached_db(60초 TTL)를 즉시 비워, F5로 바로 신규
+    데이터가 보이게 한다 — 안 그러면 최대 60초 동안 옛 캐시가 그대로 보인다."""
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(collector, "load_keywords", _naver_news_keywords)
+    monkeypatch.setattr(collector, "_CRAWLERS", {"테스트채널": lambda term: []})
+    calls = _count_calls(monkeypatch, cached_db, "clear")
+
+    collector.start_background_collection()
+
+    assert _wait_until(lambda: collector.active_run_id() is None, timeout=3.0)
+    assert calls == [1]
+
+
+def test_start_background_naver_news_collection_clears_cached_db_when_done(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(collector, "load_keywords", _naver_news_keywords)
+    monkeypatch.setattr(collector.naver_news_api_crawler, "search", lambda term: [])
+    calls = _count_calls(monkeypatch, cached_db, "clear")
+
+    collector.start_background_naver_news_collection()
+
+    assert _wait_until(lambda: collector.active_naver_news_run_id() is None)
+    assert calls == [1]
+
+
+def test_start_background_mk_news_collection_clears_cached_db_when_done(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(collector, "load_keywords", _mk_news_keywords)
+    monkeypatch.setattr(collector.mk_news_api_crawler, "search", lambda term: [])
+    calls = _count_calls(monkeypatch, cached_db, "clear")
+
+    collector.start_background_mk_news_collection()
+
+    assert _wait_until(lambda: collector.active_mk_news_run_id() is None)
+    assert calls == [1]
+
+
+def test_start_background_policy_collection_clears_cached_db_when_done(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    for crawler_name in [
+        "molit_crawler", "reb_crawler", "lh_crawler", "seoul_opengov_crawler",
+        "hf_crawler", "hug_crawler", "sh_crawler",
+    ]:
+        monkeypatch.setattr(getattr(collector, crawler_name), "fetch_press_releases", lambda start, end: [])
+    calls = _count_calls(monkeypatch, cached_db, "clear")
+
+    collector.start_background_policy_collection(days=30)
+
+    assert _wait_until(lambda: collector.active_policy_run_id() is None)
+    assert calls == [1]

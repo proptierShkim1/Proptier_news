@@ -8,6 +8,7 @@ import time
 import uuid
 from datetime import date, datetime, timedelta
 
+import cached_db
 import db
 from crawlers import article_content
 from crawlers import daum as daum_crawler
@@ -135,6 +136,7 @@ def start_background_collection(trigger: str = "수동") -> str | None:
         finally:
             with _state_lock:
                 _active_run_id = None
+            cached_db.clear()
 
     threading.Thread(target=_worker, daemon=True).start()
     return run_id
@@ -250,6 +252,7 @@ def start_background_naver_news_collection(trigger: str = "수동") -> str | Non
         finally:
             with _naver_news_state_lock:
                 _active_naver_news_run_id = None
+            cached_db.clear()
 
     threading.Thread(target=_worker, daemon=True).start()
     return run_id
@@ -309,6 +312,7 @@ def start_background_mk_news_collection(trigger: str = "수동") -> str | None:
         finally:
             with _mk_news_state_lock:
                 _active_mk_news_run_id = None
+            cached_db.clear()
 
     threading.Thread(target=_worker, daemon=True).start()
     return run_id
@@ -525,6 +529,7 @@ def start_background_policy_collection(days: int = 30, trigger: str = "수동") 
         finally:
             with _policy_state_lock:
                 _active_policy_run_id = None
+            cached_db.clear()
 
     threading.Thread(target=_worker, daemon=True).start()
     return run_id
