@@ -1,7 +1,11 @@
+from datetime import datetime
+
 import altair as alt
 import pandas as pd
 import streamlit as st
 
+import cached_db
+import notifications
 from utils import escape_html
 
 CSS = """
@@ -305,3 +309,46 @@ def floating_actions(agent_page):
 
     if st.button("\U0001F916", key="hp_agent_fab", help="AI AGENT로 이동"):
         st.switch_page(agent_page)
+
+
+def notification_bell() -> None:
+    """공통 헤더 우상단의 알림 종(🔔). 배치 수집(신규 게시물/정책 뉴스)이 새로 등록한
+    항목을 로그로 보여준다. floating_actions()와 마찬가지로 app.py가 st.navigation(...)
+    .run() **이전에** 호출해야 화면에 나타난다.
+
+    "읽음" 처리는 session_state 기준(브라우저 탭을 닫으면 초기화)이라 별도 DB가 필요
+    없다. Streamlit은 st.popover 안 콘텐츠도 열림/닫힘과 무관하게 매 rerun마다 그대로
+    실행하므로(닫혀 있어도 코드가 도는지는 프론트엔드가 화면 표시만 가릴 뿐 파이썬
+    실행 자체는 항상 됨), "팝오버를 열면 자동으로 읽음 처리"는 못 만든다 — 그래서 안에
+    명시적 "모두 확인" 버튼을 둔다."""
+    entries = notifications.build_notification_entries(
+        cached_db.get_run_batches(limit=20), cached_db.get_policy_run_batches(limit=20),
+    )
+    last_seen_at = st.session_state.setdefault(
+        "_notif_last_seen_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    )
+    unread = notifications.count_unread(entries, last_seen_at)
+
+    st.markdown("""
+    <style>
+    div[class*="st-key-hp_notif_bell"] {
+      position: fixed; top: 12px; right: 170px; z-index: 1000000;
+    }
+    div[class*="st-key-hp_notif_bell"] button {
+      border-radius: 999px; border: 1px solid var(--line); background: #fff;
+      font-weight: 800; padding: 5px 12px; box-shadow: var(--shadow-sm);
+    }
+    div[class*="st-key-hp_notif_bell"] button:hover { border-color: var(--hana); color: var(--hana-deep); }
+    </style>
+    """, unsafe_allow_html=True)
+
+    label = f"\U0001F514 {unread}" if unread else "\U0001F514"
+    with st.popover(label, key="hp_notif_bell", help="새 게시물 알림"):
+        if not entries:
+            st.caption("아직 새로 등록된 게시물이 없습니다.")
+            return
+        if unread and st.button("모두 확인", key="hp_notif_mark_read"):
+            st.session_state["_notif_last_seen_at"] = entries[0]["ran_at"]
+            st.rerun()
+        for e in entries:
+            st.caption(f"{e['ran_at']} · {e['text']}")

@@ -97,4 +97,5 @@ if st.session_state.get("_last_logged_page") != nav.title:
 # 모든 화면 공통 UI(플로팅 버튼)는 반드시 run() 이전에 호출해야 한다. position:fixed라
 # 화면상 위치는 호출 순서와 무관하다.
 theme.floating_actions(agent_page)
+theme.notification_bell()
 nav.run()
